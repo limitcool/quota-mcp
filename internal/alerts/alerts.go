@@ -145,6 +145,12 @@ func evalCommandCode(a map[string]any, cfg Config) []Alert {
 			Title: "API key 已失效", Detail: "whoami 返回 401/403，请到 commandcode.ai/settings/keys 重新签发",
 		})
 		return out
+	case "session_expired":
+		out = append(out, Alert{
+			Kind: KindSessionDead, Provider: "commandcode", Service: svc, Severity: SevCrit,
+			Title: "会话已过期", Detail: "session_token 被拒（401），请重新从 CookieCloud 同步 commandcode.ai 登录态",
+		})
+		return out
 	case "unreachable":
 		return out
 	}

@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -30,7 +31,28 @@ func Init(path string) error {
 		return err
 	}
 	_, err = DB.Exec(schema)
-	return err
+	if err != nil {
+		return err
+	}
+	return migrate()
+}
+
+// migrate 幂等地给旧库补新增列。CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，
+// 所以每加一个列都要在这里显式 ALTER 一次（列已存在时 ALTER 报错，忽略即可）。
+func migrate() error {
+	stmts := []string{
+		// v0.2.2：commandcode 增加浏览器会话面（Cookie），与 api_key 面并存。
+		`ALTER TABLE commandcode_accounts ADD COLUMN session_token_enc TEXT`,
+	}
+	for _, s := range stmts {
+		if _, err := DB.Exec(s); err != nil {
+			// 列已存在（duplicate column name）视为已迁移完成，其余错误上抛
+			if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // schema 三张表：
@@ -55,6 +77,7 @@ CREATE TABLE IF NOT EXISTS stepfun_accounts (
 CREATE TABLE IF NOT EXISTS commandcode_accounts (
 	service TEXT PRIMARY KEY,
 	api_key_enc TEXT,
+	session_token_enc TEXT,
 	label TEXT DEFAULT '',
 	identity TEXT DEFAULT '',
 	probe_data TEXT DEFAULT '',

@@ -2,14 +2,21 @@
 //
 // 协议要点（来自社区项目 MAXeaglet/commandcode-usage 对未公开端点的逆向）：
 //
-// Command Code 的全部用量数据在 api.commandcode.ai 的 /alpha/* 下，鉴权统一是
-// GET + Authorization: Bearer <api_key>——没有会话、没有续期，key 就是全部，
-// 比 StepFun 的 Oasis 双面简单一个量级：
+// Command Code 有两条互不相通的鉴权面，和 StepFun 一样必须分别登记：
 //
-//	/alpha/whoami                        → 账户身份 user:{id,name,userName} + org:{id}
-//	/alpha/billing/credits               → 余额 + 5 小时/周窗口 windowLimits
-//	/alpha/billing/subscriptions?orgId=  → 套餐 planId/status/账期起止
-//	/alpha/usage/summary                 → 账期内请求数/成功率/tokens/消耗
+//	api_key 面（Bearer）：全部用量数据在 api.commandcode.ai 的 /alpha/* 下，
+//	          GET + Authorization: Bearer <api_key>，key 就是全部。
+//	          /alpha/whoami                        → 账户身份 user:{id,name,userName} + org:{id}
+//	          /alpha/billing/credits               → 余额 + 5 小时/周窗口 windowLimits
+//	          /alpha/billing/subscriptions?orgId=  → 套餐 planId/status/账期起止
+//	          /alpha/usage/summary                 → 账期内请求数/成功率/tokens/消耗
+//
+//	session 面（Cookie）：浏览器登录后的同一批数据在 /internal/* 下，靠
+//	          __Secure-commandcode_prod_.session_token 承载身份，不带任何 Bearer 头。
+//	          端点与 /alpha 平级：/internal/billing/credits、/internal/billing/subscriptions、
+//	          /internal/usage/summary、/internal/orgs。命令面板（浏览器）走的就是这一面，
+//	          所以只要能从 CookieCloud 拿到 session_token，就不必让用户去 settings 抄 api_key。
+//	          代价：会话会过期，需要到期后重新抓 CookieCloud；api_key 是永久凭据。
 //
 // 字段名未公开文档化，上游随时可能漂移，所以解析层对 snake_case / lowerCamelCase
 // 双拼写做防御（与 stepfun 的 Field() 同一思路）；时间戳可能是毫秒数、秒数或
@@ -28,16 +35,46 @@ import (
 const (
 	// BaseURL 上游 API 根地址。开发时可由 env COMMANDCODE_API_BASE 指向本地 mock。
 	BaseURL = "https://api.commandcode.ai"
+	// AlphaPrefix 永久 api_key 面（Bearer）。
+	AlphaPrefix = "/alpha"
+	// InternalPrefix 浏览器会话面（Cookie）。
+	InternalPrefix = "/internal"
+	// SessionCookieName 浏览器登录态 cookie 名。
+	SessionCookieName = "__Secure-commandcode_prod_.session_token"
 	// UA 与社区面板保持一致
 	UA = "commandcode-usage/1.0"
 )
+
+// Credential 一次探测用的凭据：两条面二选一。都给了优先 api_key——
+// 它是永久凭据，不会因为忘记刷 CookieCloud 而掉线。
+type Credential struct {
+	// Key /alpha 面 Bearer api_key。
+	Key string
+	// Session /internal 面 session cookie 值。
+	Session string
+}
+
+// sessionMode 当前凭据是否只能走会话面。
+func (c Credential) sessionMode() bool {
+	return c.Key == "" && c.Session != ""
+}
+
+// describe 面板/告警里展示的凭据来源（不含值）。
+func (c Credential) describe() string {
+	if c.Key != "" {
+		return "api_key"
+	}
+	return "session"
+}
 
 // FailKind 失败分类。
 type FailKind string
 
 const (
-	// FailKeyRejected 401/403 = key 无效，无需继续打其余端点
+	// FailKeyRejected 401/403 = 凭据无效，无需继续打其余端点
 	FailKeyRejected FailKind = "key_rejected"
+	// FailSessionExpired session_token 过期/被注销：需要重新抓 CookieCloud
+	FailSessionExpired FailKind = "session_expired"
 	// FailHTTP 有响应但不是预期格式
 	FailHTTP FailKind = "http_error"
 	// FailTransport 网络层失败
@@ -46,15 +83,18 @@ const (
 
 // Fail 一次远程调用的失败。
 type Fail struct {
-	Kind FailKind
-	Code int
-	Msg  string
+	Kind  FailKind
+	Code  int
+	Msg   string
+	Where string // 出错的端点族（"alpha" / "internal"），便于诊断
 }
 
 func (e *Fail) Error() string {
 	switch e.Kind {
 	case FailKeyRejected:
-		return fmt.Sprintf("密钥被拒（HTTP %d）——请确认密钥有效，从 commandcode.ai/settings 获取", e.Code)
+		return fmt.Sprintf("凭据被拒（HTTP %d）——请确认 api_key 有效（commandcode.ai/settings）或重新抓取 session_token", e.Code)
+	case FailSessionExpired:
+		return "session_token 已过期/被注销——请重新从 CookieCloud 同步 commandcode.ai 登录态"
 	case FailHTTP:
 		return fmt.Sprintf("HTTP %d: %s", e.Code, e.Msg)
 	case FailTransport:
@@ -63,36 +103,58 @@ func (e *Fail) Error() string {
 	return string(e.Kind)
 }
 
+// NeedsRefresh 会话面失败是否属于「凭据过期、要人工重抓」。api_key 面永久有效，恒为 false。
+func (e *Fail) NeedsRefresh() bool {
+	return e.Kind == FailSessionExpired || e.Kind == FailKeyRejected
+}
+
 var httpClient = &http.Client{Timeout: 25 * time.Second}
 
-// get GET + Bearer 打一个 /alpha 端点。
-func get(base, path, key string) (map[string]any, *Fail) {
-	req, err := http.NewRequest(http.MethodGet, base+path, nil)
-	if err != nil {
-		return nil, &Fail{Kind: FailTransport, Msg: err.Error()}
+// request 按凭据类型选鉴权方式与端点前缀打一个端点。
+//
+//	api_key 面：GET {base}/alpha/{path} + Authorization: Bearer
+//	session 面：GET {base}/internal/{path} + Cookie: __Secure-commandcode_prod_.session_token=…
+//
+// path 传不带前缀的裸路径（如 "billing/credits"）。
+func request(cred Credential, path string) (map[string]any, *Fail) {
+	prefix, where := AlphaPrefix, "alpha"
+	if cred.sessionMode() {
+		prefix, where = InternalPrefix, "internal"
 	}
-	req.Header.Set("Authorization", "Bearer "+key)
+	req, err := http.NewRequest(http.MethodGet, BaseURL+prefix+"/"+strings.TrimPrefix(path, "/"), nil)
+	if err != nil {
+		return nil, &Fail{Kind: FailTransport, Msg: err.Error(), Where: where}
+	}
+	if cred.sessionMode() {
+		req.Header.Set("Cookie", SessionCookieName+"="+cred.Session)
+	} else {
+		req.Header.Set("Authorization", "Bearer "+cred.Key)
+	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("User-Agent", UA)
 	resp, err := httpClient.Do(req)
 	if err != nil {
-		return nil, &Fail{Kind: FailTransport, Msg: err.Error()}
+		return nil, &Fail{Kind: FailTransport, Msg: err.Error(), Where: where}
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if err != nil {
-		return nil, &Fail{Kind: FailTransport, Msg: err.Error()}
+		return nil, &Fail{Kind: FailTransport, Msg: err.Error(), Where: where}
 	}
 	if resp.StatusCode == 401 || resp.StatusCode == 403 {
-		// 密钥无效在第一个端点就会暴露，调用方应直接中止
-		return nil, &Fail{Kind: FailKeyRejected, Code: resp.StatusCode}
+		// 会话面的 401 是「该重新抓 CookieCloud」；api_key 面的 401 是「key 无效」
+		kind := FailKeyRejected
+		if cred.sessionMode() {
+			kind = FailSessionExpired
+		}
+		return nil, &Fail{Kind: kind, Code: resp.StatusCode, Where: where}
 	}
 	if resp.StatusCode >= 400 {
 		brief := []rune(string(raw))
 		if len(brief) > 240 {
 			brief = brief[:240]
 		}
-		return nil, &Fail{Kind: FailHTTP, Code: resp.StatusCode, Msg: string(brief)}
+		return nil, &Fail{Kind: FailHTTP, Code: resp.StatusCode, Msg: string(brief), Where: where}
 	}
 	var out map[string]any
 	if err := json.Unmarshal(raw, &out); err != nil {
@@ -100,7 +162,7 @@ func get(base, path, key string) (map[string]any, *Fail) {
 		if len(brief) > 200 {
 			brief = brief[:200]
 		}
-		return nil, &Fail{Kind: FailHTTP, Code: resp.StatusCode, Msg: fmt.Sprintf("响应不是 JSON: %v (%s)", err, string(brief))}
+		return nil, &Fail{Kind: FailHTTP, Code: resp.StatusCode, Msg: fmt.Sprintf("响应不是 JSON: %v (%s)", err, string(brief)), Where: where}
 	}
 	return out, nil
 }
@@ -335,9 +397,10 @@ func normalizeWindow(raw map[string]any) Window {
 
 // ---------------------------------------------------------------- 数据面
 
-// Whoami 账户身份。
-func Whoami(key string) (map[string]any, *Fail) {
-	v, f := get(BaseURL, "/alpha/whoami", key)
+// Whoami 账户身份。仅 api_key 面（/alpha）有 whoami；会话面没有身份端点，
+// 调用方在 session 模式下应跳过。orgID 供订阅端点筛选用。
+func Whoami(cred Credential) (map[string]any, *Fail) {
+	v, f := request(cred, "whoami")
 	if f != nil {
 		return nil, f
 	}
@@ -373,8 +436,8 @@ func orStr(a, b string) string {
 }
 
 // Credits 余额 + 5 小时/周窗口（面板的核心数据）。
-func Credits(key string) (map[string]any, *Fail) {
-	v, f := get(BaseURL, "/alpha/billing/credits", key)
+func Credits(cred Credential) (map[string]any, *Fail) {
+	v, f := request(cred, "billing/credits")
 	if f != nil {
 		return nil, f
 	}
@@ -435,13 +498,13 @@ func wlOrEmpty(wl map[string]any) map[string]any {
 	return wl
 }
 
-// Subscriptions 套餐与账期。
-func Subscriptions(key, orgID string) (map[string]any, *Fail) {
-	path := "/alpha/billing/subscriptions"
-	if orgID != "" {
+// Subscriptions 套餐与账期。orgId 仅 api_key 面用得到；会话面端点自身知道身份，忽略它。
+func Subscriptions(cred Credential, orgID string) (map[string]any, *Fail) {
+	path := "billing/subscriptions"
+	if cred.Key != "" && orgID != "" {
 		path += "?orgId=" + orgID
 	}
-	v, f := get(BaseURL, path, key)
+	v, f := request(cred, path)
 	if f != nil {
 		return nil, f
 	}
@@ -464,8 +527,8 @@ func Subscriptions(key, orgID string) (map[string]any, *Fail) {
 }
 
 // UsageSummary 账期累计统计（请求数/成功率/tokens/消耗）。
-func UsageSummary(key string) (map[string]any, *Fail) {
-	v, f := get(BaseURL, "/alpha/usage/summary", key)
+func UsageSummary(cred Credential) (map[string]any, *Fail) {
+	v, f := request(cred, "usage/summary")
 	if f != nil {
 		return nil, f
 	}
@@ -540,4 +603,88 @@ func UsageSummary(key string) (map[string]any, *Fail) {
 		}
 	}
 	return out, nil
+}
+
+// ---------------------------------------------------------------- 会话录入
+
+// SessionCookieName 之外的别名字段：有的导出工具会把整段 Cookie 头抄进去。
+// ParseSessionText 把这几种输入都吃下来，只回一个裸的 session_token 值。
+//
+// 接受：
+//   - 整串 document.cookie（`a=b; __Secure-commandcode_prod_.session_token=…; c=d`）
+//   - DevTools 里抄的 Cookie 头行
+//   - 裸 token 值
+func ParseSessionText(raw string) (string, error) {
+	text := strings.NewReplacer("%0A", "\n", "%0D", "\r").Replace(strings.TrimSpace(raw))
+	if text == "" {
+		return "", fmt.Errorf("会话文本为空")
+	}
+	token := grabCookie(text, SessionCookieName)
+	if token != "" {
+		return token, nil
+	}
+	// 可能就是裸值：单段、无分隔符、无空白
+	if !strings.ContainsAny(text, "; 	\r\n") {
+		return text, nil
+	}
+	// 兜底：从 = 分割的键值里找最像 session_token 的那个（名字大小写/下划线容错）
+	norm := func(s string) string {
+		return strings.ToLower(strings.NewReplacer("-", "", "_", "", ".", "").Replace(s))
+	}
+	want := norm(SessionCookieName)
+	for _, part := range strings.FieldsFunc(text, func(r rune) bool {
+		return r == ';' || r == '\n' || r == '\r'
+	}) {
+		k, v, ok := strings.Cut(part, "=")
+		if !ok {
+			continue
+		}
+		if strings.Contains(norm(k), want) {
+			if v = strings.TrimSpace(v); v != "" {
+				return v, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("没找到 %s（贴整串 cookie、Cookie 头或裸值都行）", SessionCookieName)
+}
+
+// grabCookie 从 key=value 混排文本里取一个 cookie 值（名字按大小写不敏感匹配）。
+func grabCookie(text, name string) string {
+	lower := strings.ToLower(text)
+	target := strings.ToLower(name)
+	from := 0
+	for {
+		rel := strings.Index(lower[from:], target)
+		if rel < 0 {
+			return ""
+		}
+		i := from + rel + len(target)
+		from = i + 1
+		// 名字后必须紧跟 '='（允许一点空白）
+		rest := strings.TrimLeft(text[i:], " 	")
+		if !strings.HasPrefix(rest, "=") {
+			continue
+		}
+		val := strings.TrimLeft(rest[1:], " 	")
+		end := len(val)
+		for idx, c := range val {
+			if c == ';' || c == '\n' || c == '\r' || c == ' ' || c == '"' || c == ',' {
+				end = idx
+				break
+			}
+		}
+		if v := strings.TrimSpace(val[:end]); v != "" {
+			return v
+		}
+	}
+}
+
+// SessionSummary 会话的可展示摘要（不含 token 值）。Command Code 的 session_token
+// 是不透明串（非 JWT），解不出到期时间，所以只报存在性与长度掩码。
+func SessionSummary(token string) map[string]any {
+	return map[string]any{
+		"present": token != "",
+		"len":     len([]rune(token)),
+		"mask":    maskOrNil(token),
+	}
 }
