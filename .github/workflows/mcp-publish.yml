@@ -71,10 +71,10 @@ jobs:
         run: go install github.com/modelcontextprotocol/registry/cmd/publisher@latest
 
       - name: Validate server.json
-        run: "$(go env GOPATH)/bin/publisher" validate
+        run: '$(go env GOPATH)/bin/publisher validate'
 
       - name: Login (GitHub OIDC)
-        run: "$(go env GOPATH)/bin/publisher" login github-oidc
+        run: '$(go env GOPATH)/bin/publisher login github-oidc'
 
       - name: Publish
-        run: "$(go env GOPATH)/bin/publisher" publish
+        run: '$(go env GOPATH)/bin/publisher publish'
