@@ -17,7 +17,11 @@ RUN mkdir -p /data && chown quotamcp:quotamcp /data
 USER quotamcp
 EXPOSE 8780
 VOLUME ["/data"]
+# 官方 MCP Registry 的所有权验证标注：值必须与 server.json 的 name 完全一致
+LABEL io.modelcontextprotocol.server.name="io.github.limitcool/quota-mcp"
+# 默认走 stdio：容器被 MCP 客户端 spawn 起来即对话；
+# 要跑 HTTP/REST 面就显式传参：docker run … quota-mcp -listen 0.0.0.0:8780
 # 默认绑全部网口（容器内），库落 /data 卷；主密钥务必通过 -e 注入
 ENV QUOTA_MCP_DB=/data/quota-mcp.db
 ENTRYPOINT ["/usr/local/bin/quota-mcp"]
-CMD ["-listen", "0.0.0.0:8780"]
+CMD ["-stdio"]

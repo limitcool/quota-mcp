@@ -85,7 +85,9 @@ POST   /api/commandcode/probe                    全部探测
 
 ## MCP 工具面（给 agent 查询）
 
-以 Streamable HTTP 挂载在 `/mcp`。Hermes 的 `mcp_servers` 配置示例：
+两种接法，任选其一：
+
+**1. Streamable HTTP**（挂载在 `/mcp`）——适合常驻部署。Hermes 的 `mcp_servers` 配置示例：
 
 ```yaml
 mcp_servers:
@@ -93,7 +95,17 @@ mcp_servers:
     url: http://<你的机器>:8780/mcp
 ```
 
-Claude Code / 其他 MCP 客户端同理（或走 stdio：`go run ./cmd/quota-mcp` 加 `-listen` 后由客户端以 HTTP 接入）。
+**2. stdio**——适合客户端自行拉起服务的场景（Claude Code、容器、注册表一键安装）：
+
+```bash
+# 本地二进制
+quota-mcp -stdio
+
+# 或直接用发布好的镜像（零配置跑起来）
+docker run -i --rm -v quota-mcp-data:/data ghcr.io/limitcool/quota-mcp:latest
+```
+
+Claude Code / 其他 MCP 客户端同理。
 
 工具列表（全部只读）：
 

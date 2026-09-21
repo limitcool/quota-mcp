@@ -3,6 +3,8 @@ services:
     image: ghcr.io/limitcool/quota-mcp:latest
     container_name: quota-mcp
     restart: unless-stopped
+    # 镜像默认是 stdio 模式（给 MCP 客户端 spawn 用）；这里显式切回 HTTP/REST 面
+    command: ["-listen", "0.0.0.0:8780"]
     ports:
       - "8780:8780"
     volumes:

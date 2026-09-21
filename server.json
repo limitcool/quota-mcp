@@ -1,0 +1,35 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.limitcool/quota-mcp",
+  "title": "quota-mcp",
+  "description": "Usage & quota tracker for AI subscription accounts (StepFun, Command Code). Ask your agent how much quota is left.",
+  "version": "0.1.0",
+  "websiteUrl": "https://github.com/limitcool/quota-mcp",
+  "repository": {
+    "url": "https://github.com/limitcool/quota-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "oci",
+      "identifier": "ghcr.io/limitcool/quota-mcp:0.1.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "QUOTA_MCP_MASTER_KEY",
+          "description": "64 hex chars AES master key for credential encryption (required in production; without it the key is derived from machine traits)",
+          "isRequired": false,
+          "isSecret": true
+        },
+        {
+          "name": "QUOTA_MCP_DB",
+          "description": "SQLite path inside the container (default /data/quota-mcp.db, backed by the /data volume)",
+          "isRequired": false,
+          "isSecret": false
+        }
+      ]
+    }
+  ]
+}

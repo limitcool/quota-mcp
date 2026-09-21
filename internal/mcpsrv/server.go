@@ -21,7 +21,7 @@ import (
 func NewServer() *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
 		Name:    "quota-mcp",
-		Version: "1.0.0",
+		Version: "0.1.0",
 	}, nil)
 
 	// 1. 列出全部账户（掩码视图 + 最近一次探测结果）

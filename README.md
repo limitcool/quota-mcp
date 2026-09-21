@@ -86,12 +86,24 @@ POST   /api/commandcode/probe                    Probe all
 
 ## MCP surface (for agents)
 
-Served as Streamable HTTP on `/mcp`. Example `mcp_servers` entry:
+Two ways to connect — pick either:
+
+**1. Streamable HTTP** (served on `/mcp`) — for always-on deployments:
 
 ```yaml
 mcp_servers:
   quota:
     url: http://<your-host>:8780/mcp
+```
+
+**2. stdio** — for clients that spawn the server themselves (Claude Code, containers, `mcp-publisher`-style registry installs):
+
+```bash
+# local binary
+quota-mcp -stdio
+
+# or straight from the published image (works with zero setup)
+docker run -i --rm -v quota-mcp-data:/data ghcr.io/limitcool/quota-mcp:latest
 ```
 
 Works the same way from Claude Code or any other MCP client.
