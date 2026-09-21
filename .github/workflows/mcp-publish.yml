@@ -1,0 +1,80 @@
+name: MCP Registry Publish
+
+# 把 server.json 发布到官方 MCP Registry（registry.modelcontextprotocol.io）。
+# 认证走 GitHub OIDC（id-token: write），无需任何交互式登录。
+# 触发方式：手动 dispatch，或推 tag（v*）——tag 触发时会先等 Docker workflow
+# 把对应版本的 ghcr.io 镜像推好（镜像 + LABEL 是注册表的验权依据）。
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的版本 tag（对应 ghcr.io 镜像 tag，如 0.1.0）"
+        required: true
+        default: "0.1.0"
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: mcp-publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Publish to MCP Registry
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+
+      - name: Resolve version tag
+        id: ver
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Wait for the ghcr.io image (Docker workflow builds it on the same tag)
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          for i in $(seq 1 40); do
+            if docker manifest inspect "ghcr.io/limitcool/quota-mcp:${TAG}" >/dev/null 2>&1; then
+              echo "镜像已就绪: ghcr.io/limitcool/quota-mcp:${TAG}"
+              exit 0
+            fi
+            echo "等待镜像… (${i}/40)"
+            sleep 20
+          done
+          echo "等不到对应版本的镜像，放弃发布" >&2
+          exit 1
+
+      - name: Point server.json at this version
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+        run: |
+          sed -i "s|ghcr.io/limitcool/quota-mcp:[^\"]*|ghcr.io/limitcool/quota-mcp:${TAG}|" server.json
+          sed -i "s|\"version\": \"[^\"]*\"|\"version\": \"${TAG}\"|" server.json
+          cat server.json
+
+      - name: Install mcp-publisher
+        run: go install github.com/modelcontextprotocol/registry/cmd/publisher@latest
+
+      - name: Validate server.json
+        run: "$(go env GOPATH)/bin/publisher" validate
+
+      - name: Login (GitHub OIDC)
+        run: "$(go env GOPATH)/bin/publisher" login github-oidc
+
+      - name: Publish
+        run: "$(go env GOPATH)/bin/publisher" publish
