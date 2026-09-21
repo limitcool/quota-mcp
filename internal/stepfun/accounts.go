@@ -12,7 +12,7 @@ import (
 
 // 一个「账户」= stepfun_accounts 表里的一行，两个密文字段：
 //
-//	access_key_enc      plan 推理 key（sk-…），永久有效
+//	access_key_enc      plan 推理 key（永久有效，形状不固定：sk- 或裸格式）
 //	console_session_enc {token, webid, refresh} JSON，~2 h，可无限续
 //
 // 手机号注册的账户永远拿不到第二次登录（发验证码要过腾讯 TCaptcha），这类槽位只登记
@@ -45,7 +45,7 @@ type EnrolRequest struct {
 	// Region ai | com
 	Region string `json:"region"`
 	Label  string `json:"label"`
-	// AccessKey plan 推理 key（sk-…）。可以只登记会话不登记 key，反之亦然。
+	// AccessKey plan 推理 key（形状不固定）。可以只登记会话不登记 key，反之亦然。
 	AccessKey string `json:"access_key"`
 	// SessionText 用户自己从浏览器里复制的 cookie 串 / Oasis-Token 头 / 裸 JWT
 	SessionText string `json:"session_text"`
@@ -320,9 +320,9 @@ func Enrol(req *EnrolRequest) (map[string]any, error) {
 		return nil, fmt.Errorf("region 要是 ai 或 com")
 	}
 	accessKey := strings.TrimSpace(req.AccessKey)
-	if accessKey != "" && !strings.HasPrefix(accessKey, "sk-") {
-		return nil, fmt.Errorf("access_key 看起来不是 StepFun 的 sk- 开头 key")
-	}
+	// 不假设 key 的形状：StepFun 实际签发的 key 并非一律 sk- 开头（大量裸格式，
+	// 64/65 字符），前置格式校验只会挡住有效 key。真伪交给下面的探测——
+	// 探不通时错误里带的是上游原话（如 Incorrect API key provided），比本地猜准。
 	var session *Session
 	if text := strings.TrimSpace(req.SessionText); text != "" {
 		s, err := ParseSessionText(text)
