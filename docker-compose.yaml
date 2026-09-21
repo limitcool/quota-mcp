@@ -1,0 +1,17 @@
+services:
+  quota-mcp:
+    image: ghcr.io/limitcool/quota-mcp:latest
+    container_name: quota-mcp
+    restart: unless-stopped
+    ports:
+      - "8780:8780"
+    volumes:
+      - quota-mcp-data:/data
+    environment:
+      # 务必设置：64 hex 字符主密钥。不设则按容器机器特征派生，
+      # 容器重建后旧密文读不出。生成：openssl rand -hex 32
+      QUOTA_MCP_MASTER_KEY: ${QUOTA_MCP_MASTER_KEY:?请先在 .env 里设置 QUOTA_MCP_MASTER_KEY}
+      TZ: Asia/Shanghai
+
+volumes:
+  quota-mcp-data:

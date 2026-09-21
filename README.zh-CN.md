@@ -136,6 +136,37 @@ internal/mcpsrv/      MCP 查询面（modelcontextprotocol/go-sdk）
 - REST 含写操作，**只绑回环或内网**；要对外就把 MCP 面单独暴露（或加反代 +鉴权）
 - 主密钥丢了 = 库里所有凭据读不出，请备份 `QUOTA_MCP_MASTER_KEY`
 
+## Releases
+
+每个 GitHub Release 附带 Linux / macOS / Windows（amd64 + arm64）二进制。取最新版：
+
+```bash
+# 例：linux amd64
+curl -LO https://github.com/limitcool/quota-mcp/releases/latest/download/quota-mcp_linux_amd64
+chmod +x quota-mcp_linux_amd64
+```
+
+## Docker
+
+镜像发布在 `ghcr.io/limitcool/quota-mcp`（amd64 + arm64）：main 每次推送出 `:main`，打 tag 出 `:v1.0.0` / `:latest`。
+
+```bash
+docker run -d --name quota-mcp \
+  -p 8780:8780 \
+  -v quota-mcp-data:/data \
+  -e QUOTA_MCP_MASTER_KEY=$(openssl rand -hex 32) \
+  ghcr.io/limitcool/quota-mcp:latest
+```
+
+或用自带的 compose（`QUOTA_MCP_MASTER_KEY` 必填，写进 `.env`）：
+
+```bash
+echo "QUOTA_MCP_MASTER_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d
+```
+
+数据库在 `/data` 卷里（`QUOTA_MCP_DB=/data/quota-mcp.db`）。**主密钥务必备份**——丢了库里所有凭据都读不出。
+
 ## License
 
 MIT

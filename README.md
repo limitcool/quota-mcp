@@ -147,6 +147,27 @@ curl -LO https://github.com/limitcool/quota-mcp/releases/latest/download/quota-m
 chmod +x quota-mcp_linux_amd64
 ```
 
+## Docker
+
+Image is published to `ghcr.io/limitcool/quota-mcp` (amd64 + arm64) on every main push (`:main`) and tag (`:v1.0.0`, `:latest`).
+
+```bash
+docker run -d --name quota-mcp \
+  -p 8780:8780 \
+  -v quota-mcp-data:/data \
+  -e QUOTA_MCP_MASTER_KEY=$(openssl rand -hex 32) \
+  ghcr.io/limitcool/quota-mcp:latest
+```
+
+Or with the bundled compose file (`QUOTA_MCP_MASTER_KEY` is required, put it in `.env`):
+
+```bash
+echo "QUOTA_MCP_MASTER_KEY=$(openssl rand -hex 32)" > .env
+docker compose up -d
+```
+
+The database lives in the `/data` volume (`QUOTA_MCP_DB=/data/quota-mcp.db`). **Back up the master key** — losing it makes every stored credential unreadable.
+
 ## License
 
 MIT

@@ -1,0 +1,12 @@
+# 构建上下文排除项（Docker）
+.git/
+.github/
+data/
+*.log
+.gitignore
+*.md
+LICENSE
+Dockerfile
+.dockerignore
+quota-mcp
+quota-mcp.exe
