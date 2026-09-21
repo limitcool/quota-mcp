@@ -39,7 +39,9 @@ After startup:
 
 ## Enrolling accounts
 
-### Command Code (a single key — the easy one)
+### Command Code (two credential planes)
+
+The **alpha/API-key plane** is the easy one — a permanent Bearer key:
 
 ```bash
 curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
@@ -48,6 +50,16 @@ curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
 ```
 
 Get the key from [commandcode.ai/settings/keys](https://commandcode.ai/settings/keys) (shown once at creation). The server validates it with `whoami` first and refuses to store a rejected key.
+
+The **internal/session plane** mirrors the browser: pass `session_text` (the whole `Cookie:` header, a `document.cookie` dump, or the bare `__Secure-commandcode_prod_.session_token` value). It is validated against `billing/credits` and never stored unless it passes. Sessions expire, so refresh them from CookieCloud or by copying the cookie again from DevTools:
+
+```bash
+curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"cc-myname","session_text":"__Secure-commandcode_prod_.session_token=eyJ..."}'
+```
+
+When both are stored the API key wins. **Each enrol overwrites the credential planes it was given** — re-enrolling with only `api_key` clears any stored session, and vice-versa, so a rotation is never silently skipped.
 
 ### StepFun (browser session)
 
@@ -78,7 +90,7 @@ DELETE /api/stepfun/accounts/{service}           Delete
 POST   /api/stepfun/probe                        Probe all (cron-friendly)
 
 GET    /api/commandcode/accounts                 List (masked view)
-POST   /api/commandcode/accounts                 Enrol (key validated via whoami first)
+POST   /api/commandcode/accounts                 Enrol/update (api_key or session_text; stored only if it probes OK)
 POST   /api/commandcode/accounts/{service}/probe Probe
 DELETE /api/commandcode/accounts/{service}       Delete
 POST   /api/commandcode/probe                    Probe all

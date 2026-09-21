@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
 	"time"
 
@@ -34,6 +35,10 @@ func (a *Account) credential() Credential {
 }
 
 // EnrolRequest 登记一个账户的入参。
+//
+// 轮换语义：每次 Enrol 都写「本次请求提供的凭据」——未提供的面会被置 NULL。
+// 例：只带 api_key 重新登记会清掉旧的 session_token_enc，反之亦然。
+// 这样用户「换成 api_key 就当已轮换」的直觉与库内状态一致，不会残留旧 cookie 密文。
 type EnrolRequest struct {
 	Service string `json:"service"`
 	// APIKey 永久 Bearer key（可选；与 session_text 至少给一个）
@@ -57,12 +62,15 @@ func mustJSON(v any) string {
 
 // ---------------------------------------------------------------- 存储层
 
+// upsertSQL 每次登记都整行覆盖凭据两面：未提供（NULL）的面会被清空，
+// 而不是保留旧值。这是刻意的轮换语义——只给 api_key 重新登记会清掉旧 session，
+// 只给 session_text 会清掉旧 key，避免「用户以为已轮换、旧密文却永久留库」的盲区。
 const upsertSQL = `INSERT INTO commandcode_accounts
 	(service, api_key_enc, session_token_enc, label, updated_at)
 	VALUES (?, ?, ?, ?, ?)
 	ON CONFLICT(service) DO UPDATE SET
-		api_key_enc = COALESCE(excluded.api_key_enc, commandcode_accounts.api_key_enc),
-		session_token_enc = COALESCE(excluded.session_token_enc, commandcode_accounts.session_token_enc),
+		api_key_enc = excluded.api_key_enc,
+		session_token_enc = excluded.session_token_enc,
 		label = COALESCE(NULLIF(excluded.label, ''), commandcode_accounts.label),
 		updated_at = excluded.updated_at`
 
@@ -387,9 +395,13 @@ func Probe(service string) (map[string]any, error) {
 	}
 	out["verdict"] = verdict(out)
 	if id := identityOf(out); id != "" {
-		_ = setIdentity(service, id)
+		if err := setIdentity(service, id); err != nil {
+			log.Printf("commandcode: 写入 %s 的 identity 失败（面板可能显示旧身份）: %v", service, err)
+		}
 	}
-	_ = setProbeData(service, out)
+	if err := setProbeData(service, out); err != nil {
+		log.Printf("commandcode: 写入 %s 的 probe_data 失败（面板可能显示旧探测结果）: %v", service, err)
+	}
 	return out, nil
 }
 

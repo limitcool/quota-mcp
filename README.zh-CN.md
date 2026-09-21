@@ -38,7 +38,9 @@ export QUOTA_MCP_MASTER_KEY=$(openssl rand -hex 32)
 
 ## 登记账户
 
-### Command Code（一把 key，最简单）
+### Command Code（两条凭据面）
+
+**alpha / api_key 面**最简单，是一把永久 Bearer key：
 
 ```bash
 curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
@@ -47,6 +49,16 @@ curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
 ```
 
 key 从 [commandcode.ai/settings/keys](https://commandcode.ai/settings/keys) 获取（只在创建时展示一次）。服务端先打 whoami 验证，被拒不落库。
+
+**internal / 会话面**对应浏览器登录态：传 `session_text`（整段 `Cookie:` 头、`document.cookie` 串，或裸的 `__Secure-commandcode_prod_.session_token` 值）。服务端用 `billing/credits` 验证，探不通不落库。会话会过期，需从 CookieCloud 同步或重新从 DevTools 复制 cookie：
+
+```bash
+curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
+  -H 'Content-Type: application/json' \
+  -d '{"service":"cc-myname","session_text":"__Secure-commandcode_prod_.session_token=eyJ..."}'
+```
+
+两面并存时 api_key 优先。**每次登记都会覆盖本次提供的凭据面**——只带 `api_key` 重新登记会清掉已存的 session，反之亦然，轮换不会被静默跳过。
 
 ### StepFun（浏览器会话）
 
@@ -77,7 +89,7 @@ DELETE /api/stepfun/accounts/{service}            删除
 POST   /api/stepfun/probe                        全部探测（给 cron 用）
 
 GET    /api/commandcode/accounts                 列表（掩码视图）
-POST   /api/commandcode/accounts                 登记（key 先过 whoami 验证）
+POST   /api/commandcode/accounts                 登记/更新（api_key 或 session_text；探通才落库）
 POST   /api/commandcode/accounts/{service}/probe 探测
 DELETE /api/commandcode/accounts/{service}        删除
 POST   /api/commandcode/probe                    全部探测

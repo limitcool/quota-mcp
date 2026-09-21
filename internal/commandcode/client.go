@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -623,8 +624,11 @@ func ParseSessionText(raw string) (string, error) {
 	if token != "" {
 		return token, nil
 	}
-	// 可能就是裸值：单段、无分隔符、无空白
-	if !strings.ContainsAny(text, "; 	\r\n") {
+	// 可能就是裸值：单段、无分隔符、无空白，且不含 cookie 分隔符 ',' 或 '='。
+	// 含 ',' 的输入不可能是 token（',' 是 cookie 分隔符）；含 '=' 的走下面的键值兜底，
+	// 那里会要求 '=' 左边的 key 确实是 session 名，避免把 "abc=def==" 之类误收成 token。
+	// 名字本身不算值：只贴了 cookie 名（无 =）时应报「没找到」而不是把名字当 token。
+	if !strings.ContainsAny(text, "; 	\r\n,=") && !strings.EqualFold(text, SessionCookieName) {
 		return text, nil
 	}
 	// 兜底：从 = 分割的键值里找最像 session_token 的那个（名字大小写/下划线容错）
@@ -654,6 +658,10 @@ func grabCookie(text, name string) string {
 	target := strings.ToLower(name)
 	from := 0
 	for {
+		// 上一次匹配正好落在串尾时 from = i+1 > len(lower)，再切片会越界 panic。
+		if from >= len(lower) {
+			return ""
+		}
 		rel := strings.Index(lower[from:], target)
 		if rel < 0 {
 			return ""
@@ -674,6 +682,10 @@ func grabCookie(text, name string) string {
 			}
 		}
 		if v := strings.TrimSpace(val[:end]); v != "" {
+			// cookie 值里可能带 %XX 转义（如 %20），统一解一次
+			if dec, err := url.PathUnescape(v); err == nil && dec != "" {
+				v = dec
+			}
 			return v
 		}
 	}
