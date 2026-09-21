@@ -116,6 +116,68 @@ All tools are read-only:
 | `quota_probe_account` | Live-probe one account (hits upstream, takes a few seconds) |
 | `quota_probe_all` | Serially probe all accounts and refresh the cache |
 | `quota_status` | Summary: per-platform counts of serving / limited / invalid / needs-relogin, plus a one-line status per account |
+| `quota_check_alerts` | Firing alerts: low quota, upcoming expiry, dead session, rejected key, window exceeded |
+| `quota_report` | The scheduled-digest payload: all account numbers + current alerts |
+
+## Alerts, expiry warnings & scheduled digest
+
+quota-mcp owns **condition detection** (it holds the data and runs a 60 s background loop);
+**scheduling and delivery belong to your agent platform**. A hermes-style wiring:
+
+### 1. Threshold & expiry alerts (event-driven, push)
+
+A background evaluator refreshes stale probe data (>5 min), evaluates rules, keeps a
+firing/resolved state machine in SQLite (`alert_events`), and POSTs **only the transitions**
+to a webhook — the same alert never repeats until it clears and fires again.
+
+Rules: `credit_low` (remaining share below threshold), `expiring_soon` (subscription/billing
+period ending within N days), `session_dead` (StepFun console session needs re-import),
+`key_rejected` (Command Code key got 401/403), `window_limited` (rate window exceeded).
+
+```bash
+QUOTA_MCP_ALERT_WEBHOOK_URL=http://<hermes>:8642/webhooks/quota \
+QUOTA_MCP_ALERT_CREDIT_PCT=0.2 \
+QUOTA_MCP_ALERT_EXPIRY_DAYS=7 \
+./quota-mcp -listen 0.0.0.0:8780
+```
+
+Payload pushed on each transition:
+
+```json
+{
+  "source": "quota-mcp",
+  "at": "2026-09-21T15:52:30Z",
+  "fired":    [{"kind":"credit_low","provider":"stepfun","service":"ai-…","severity":"warn","title":"订阅额度即将耗尽","detail":"剩余 13%（阈值 20%），2026-10-20 重置"}],
+  "resolved": []
+}
+```
+
+**No webhook? No problem** — hermes (or anything) can poll instead:
+
+```yaml
+# hermes mcp_servers
+mcp_servers:
+  quota:
+    url: http://<host>:8780/mcp
+```
+
+then have a hermes cron every 15–30 min call `quota_check_alerts` and `hermes send` anything
+new. Same for `GET /api/alerts?history=20`.
+
+### 2. Scheduled digest (cron)
+
+`quota_report` (or `GET /api/report`) returns a stable, agent-friendly payload: every account's
+plan / expiry / remaining quota / session state / window usage / request stats, plus current
+alerts. Point hermes's existing 09:30 cron at it: one turn calls the tool, composes the message,
+and delivers via `hermes send`. No scheduler is duplicated inside quota-mcp.
+
+### 3. Environment variables
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `QUOTA_MCP_ALERT_CREDIT_PCT` | `0.2` | Fires when remaining share drops below this |
+| `QUOTA_MCP_ALERT_EXPIRY_DAYS` | `7` | Fires when subscription/billing period ends within N days |
+| `QUOTA_MCP_ALERT_WEBHOOK_URL` | — | POST target for alert transitions; empty = record only (pull mode) |
 
 Example (`quota_status` output — what an agent would read to answer "how much quota is left?"):
 
@@ -141,6 +203,8 @@ internal/stepfun/     StepFun protocol client + account registry + background re
 internal/commandcode/ Command Code protocol client + account registry
 internal/api/         REST management surface (net/http, no framework)
 internal/mcpsrv/      MCP query surface (modelcontextprotocol/go-sdk)
+internal/alerts/      Alert rules + firing/resolved state machine + webhook push
+internal/digest/       Scheduled-digest payload for cron consumers
 ```
 
 ## Security boundary

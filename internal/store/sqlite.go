@@ -33,10 +33,11 @@ func Init(path string) error {
 	return err
 }
 
-// schema 两张账户表，一 provider 一张：
+// schema 三张表：
 //
 //	stepfun_accounts    —— 双鉴权面：plan key（永久）+ console 会话（~2h，可续）
 //	commandcode_accounts —— 单把 Bearer key，无会话
+//	alert_events        —— 告警状态机（fingerprint 去重，firing/resolved 生命周期）
 //
 // 密文列只存密文；identity 存非机密身份（uid/邮箱/key 掩码），probe_data 存最近一次探测聚合。
 const schema = `
@@ -59,6 +60,21 @@ CREATE TABLE IF NOT EXISTS commandcode_accounts (
 	probe_data TEXT DEFAULT '',
 	created_at TEXT DEFAULT (datetime('now')),
 	updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS alert_events (
+	id INTEGER PRIMARY KEY AUTOINCREMENT,
+	fingerprint TEXT NOT NULL UNIQUE,
+	kind TEXT NOT NULL,
+	provider TEXT NOT NULL,
+	service TEXT NOT NULL,
+	severity TEXT NOT NULL,
+	title TEXT NOT NULL,
+	detail TEXT NOT NULL,
+	state TEXT NOT NULL DEFAULT 'firing',
+	first_seen TEXT NOT NULL,
+	last_seen TEXT NOT NULL,
+	resolved_at TEXT,
+	notified INTEGER NOT NULL DEFAULT 0
 );
 `
 

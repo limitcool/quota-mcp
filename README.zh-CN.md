@@ -115,6 +115,8 @@ Claude Code / 其他 MCP 客户端同理。
 | `quota_probe_account` | 实时探测单个账户（打上游，慢数秒） |
 | `quota_probe_all` | 串行探测全部账户并刷新缓存 |
 | `quota_status` | 汇总：各平台账户数、健康/限流/失效数量、每账户一句话状态 |
+| `quota_check_alerts` | 触发中的告警：额度低于阈值、即将到期、会话掉线、key 失效、窗口超限 |
+| `quota_report` | 定时播报 payload：各账户关键数字 + 当前告警 |
 
 示例（问 agent「StepFun 额度还剩多少」→ 它调 `quota_status` / `quota_list_accounts`）：
 
@@ -131,6 +133,48 @@ Claude Code / 其他 MCP 客户端同理。
 }
 ```
 
+## 阈值告警 / 过期告警 / 定时播报
+
+职责划分：**quota-mcp 负责“判定条件”**（它持有数据、有 60s 后台循环），**调度与投递是 agent 平台（hermes）的强项**。三种功能的接法：
+
+### 1. 阈值告警 + 过期告警（事件驱动，push）
+
+后台评估器：探测数据超 5 分钟自动刷新 → 规则评估 → SQLite 状态机（`alert_events`，firing/resolved）→ **只推跃迁瞬间**到 webhook（同一条告警不清除不重复推）。
+
+规则五类：`credit_low`（剩余额度低于阈值）、`expiring_soon`（订阅/账期 N 天内结束）、`session_dead`（StepFun console 会话需重新导入）、`key_rejected`（Command Code key 401/403）、`window_limited`（节流窗口超限）。
+
+```bash
+QUOTA_MCP_ALERT_WEBHOOK_URL=http://<hermes>:8642/webhooks/quota \
+QUOTA_MCP_ALERT_CREDIT_PCT=0.2 \
+QUOTA_MCP_ALERT_EXPIRY_DAYS=7 \
+./quota-mcp -listen 0.0.0.0:8780
+```
+
+跃迁时推送的 payload：
+
+```json
+{
+  "source": "quota-mcp",
+  "at": "2026-09-21T15:52:30Z",
+  "fired":    [{"kind":"credit_low","provider":"stepfun","service":"ai-…","severity":"warn","title":"订阅额度即将耗尽","detail":"剩余 13%（阈值 20%），2026-10-20 重置"}],
+  "resolved": []
+}
+```
+
+**没有 webhook 也能用**（pull 模式）：hermes 的 cron 每 15–30 分钟跑一个 turn 调 `quota_check_alerts`（或 `GET /api/alerts?history=20`），有新告警就 `hermes send` 出去。
+
+### 2. 定时播报（cron）
+
+`quota_report`（或 `GET /api/report`）返回字段稳定的日报 payload：各账户套餐、到期、剩余额度、会话状态、窗口用量、请求统计 + 当前告警。hermes 已有的 9:30 cron 直接消费它：跑一个 turn 调工具 → 整理成消息 → `hermes send` 投递。quota-mcp 不重复造调度器。
+
+### 3. 相关环境变量
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `QUOTA_MCP_ALERT_CREDIT_PCT` | `0.2` | 剩余占比低于该值触发额度告警 |
+| `QUOTA_MCP_ALERT_EXPIRY_DAYS` | `7` | 订阅/账期在该天数内结束触发到期告警 |
+| `QUOTA_MCP_ALERT_WEBHOOK_URL` | — | 告警跃迁 POST 目标；空 = 只记账不推送（pull 模式） |
+
 ## 项目结构
 
 ```
@@ -140,6 +184,8 @@ internal/stepfun/     StepFun 协议客户端 + 账户登记册 + 后台续期�
 internal/commandcode/ Command Code 协议客户端 + 账户登记册
 internal/api/         REST 管理面（net/http，无框架）
 internal/mcpsrv/      MCP 查询面（modelcontextprotocol/go-sdk）
+internal/alerts/      告警规则 + firing/resolved 状态机 + webhook 推送
+internal/digest/      定时播报 payload 组装
 ```
 
 ## 安全边界

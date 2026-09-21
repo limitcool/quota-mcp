@@ -8,9 +8,12 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/limitcool/quota-mcp/internal/alerts"
 	"github.com/limitcool/quota-mcp/internal/commandcode"
+	"github.com/limitcool/quota-mcp/internal/digest"
 	"github.com/limitcool/quota-mcp/internal/stepfun"
 )
 
@@ -28,12 +31,53 @@ func Handler() *http.ServeMux {
 	mux.HandleFunc("/api/commandcode/accounts/", commandcodeAccount)
 	mux.HandleFunc("/api/commandcode/probe", commandcodeProbeAll)
 
+	// 告警与播报
+	mux.HandleFunc("/api/alerts", handleAlerts)
+	mux.HandleFunc("/api/report", handleReport)
+
 	// 健康检查
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 
 	return mux
+}
+
+// GET /api/alerts?history=20 — 触发中的告警（+ 可选历史）
+func handleAlerts(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	firing, err := alerts.Firing()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	out := map[string]any{"firing": firing, "firing_count": len(firing)}
+	if n, err := strconv.Atoi(r.URL.Query().Get("history")); err == nil && n > 0 {
+		h, err := alerts.History(n)
+		if err != nil {
+			fail(w, err)
+			return
+		}
+		out["history"] = h
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// GET /api/report — 定时播报 payload（hermes cron 每天 9:30 拉这个）
+func handleReport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+		return
+	}
+	rep, err := digest.Report()
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, rep)
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

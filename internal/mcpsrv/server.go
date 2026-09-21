@@ -13,7 +13,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/limitcool/quota-mcp/internal/alerts"
 	"github.com/limitcool/quota-mcp/internal/commandcode"
+	"github.com/limitcool/quota-mcp/internal/digest"
 	"github.com/limitcool/quota-mcp/internal/stepfun"
 )
 
@@ -30,17 +32,21 @@ func NewServer() *mcp.Server {
 		Description: "列出全部已登记的 AI 订阅账户（StepFun / Command Code），返回掩码视图：" +
 			"套餐、订阅到期、剩余额度（console 面的真实数据）、会话/密钥状态。provider 可传 stepfun / commandcode / all。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
-		Provider string `json:"provider" jsonschema:"stepfun|commandcode|all，默认 all"`
+		Provider *string `json:"provider,omitempty" jsonschema:"stepfun|commandcode|all，默认 all"`
 	}) (*mcp.CallToolResult, any, error) {
 		out := map[string]any{}
-		if p := args.Provider; p == "" || p == "all" || p == "stepfun" {
+		prov := ""
+		if args.Provider != nil {
+			prov = *args.Provider
+		}
+		if p := prov; p == "" || p == "all" || p == "stepfun" {
 			items, err := stepfun.List()
 			if err != nil {
 				return toolErr(err)
 			}
 			out["stepfun"] = items
 		}
-		if p := args.Provider; p == "" || p == "all" || p == "commandcode" {
+		if prov == "" || prov == "all" || prov == "commandcode" {
 			items, err := commandcode.List()
 			if err != nil {
 				return toolErr(err)
@@ -86,10 +92,14 @@ func NewServer() *mcp.Server {
 		Description: "串行探测全部账户并刷新缓存。账户多或有网络黑洞时会比较慢（每个账户数秒）。" +
 			"只看缓存数据用 quota_list_accounts 就够。",
 	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
-		Provider string `json:"provider" jsonschema:"stepfun|commandcode|all，默认 all"`
+		Provider *string `json:"provider,omitempty" jsonschema:"stepfun|commandcode|all，默认 all"`
 	}) (*mcp.CallToolResult, any, error) {
 		out := map[string]any{}
-		if p := args.Provider; p == "" || p == "all" || p == "stepfun" {
+		prov := ""
+		if args.Provider != nil {
+			prov = *args.Provider
+		}
+		if p := prov; p == "" || p == "all" || p == "stepfun" {
 			svcs, err := stepfun.Services()
 			if err != nil {
 				return toolErr(err)
@@ -104,7 +114,7 @@ func NewServer() *mcp.Server {
 			}
 			out["stepfun"] = items
 		}
-		if p := args.Provider; p == "" || p == "all" || p == "commandcode" {
+		if prov == "" || prov == "all" || prov == "commandcode" {
 			svcs, err := commandcode.Services()
 			if err != nil {
 				return toolErr(err)
@@ -140,6 +150,46 @@ func NewServer() *mcp.Server {
 		out["stepfun"] = summarize(sf)
 		out["commandcode"] = summarizeCC(cc)
 		return toolJSON(out)
+	})
+
+	// 5. 当前触发的告警（阈值/过期/掉线/key 失效）——hermes 轮询这个做告警
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "quota_check_alerts",
+		Description: "当前触发中的告警：剩余额度低于阈值、订阅/账期即将到期、console 会话掉线需重新登录、" +
+			"API key 失效、节流窗口超限。无告警时返回空列表。同一条告警不重复返回，恢复后会自动消失。",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct {
+		History *int `json:"history,omitempty" jsonschema:"附带最近多少条历史（含已恢复），0 = 只要触发中的"`
+	}) (*mcp.CallToolResult, any, error) {
+		firing, err := alerts.Firing()
+		if err != nil {
+			return toolErr(err)
+		}
+		out := map[string]any{"firing": firing, "firing_count": len(firing)}
+		historyN := 0
+		if args.History != nil {
+			historyN = *args.History
+		}
+		if historyN > 0 {
+			h, err := alerts.History(historyN)
+			if err != nil {
+				return toolErr(err)
+			}
+			out["history"] = h
+		}
+		return toolJSON(out)
+	})
+
+	// 6. 定时播报 payload（hermes cron 每天 9:30 调它生成日报）
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "quota_report",
+		Description: "定时播报用的汇总 payload：两个平台全部账户的关键数字（套餐、到期、剩余额度、会话状态、" +
+			"窗口用量、请求统计）+ 当前告警。适合 hermes cron 拉取后整理成消息投递。",
+	}, func(ctx context.Context, req *mcp.CallToolRequest, args struct{}) (*mcp.CallToolResult, any, error) {
+		r, err := digest.Report()
+		if err != nil {
+			return toolErr(err)
+		}
+		return toolJSON(r)
 	})
 
 	return server
