@@ -10,24 +10,37 @@ import (
 	"github.com/limitcool/quota-mcp/internal/store"
 )
 
-// 一个「账户」= commandcode_accounts 表里的一行：一把 Bearer API key（密文）。
-// Command Code 没有会话概念，key 即全部，所以不存在续期；探测就是把四个
-// /alpha 端点各打一遍，任一面失败不影响其他面（面板按面各自显示）。
+// 一个「账户」= commandcode_accounts 表里的一行，两条鉴权面二选一或并存：
+//
+//	api_key_enc       /alpha 面永久 Bearer key（commandcode.ai/settings 获取）
+//	session_token_enc /internal 面浏览器会话 cookie（__Secure-commandcode_prod_.session_token）
+//
+// api_key 永久有效、不会掉线，会话_token 会过期需要重抓。两者都给时优先用 api_key。
+// 没有续期机制：会话过期了只能重新从 CookieCloud 同步。
 
-// Account 内存中的账户视图（含解密的 key 明文，绝不进任何响应体）。
+// Account 内存中的账户视图（含解密的凭据明文，绝不进任何响应体）。
 type Account struct {
 	Service   string
 	APIKey    string
+	Session   string
 	Label     string
 	ProbeData map[string]any
 	UpdatedAt string
 }
 
+// credential 组装一次探测用的凭据（api_key 优先）。
+func (a *Account) credential() Credential {
+	return Credential{Key: a.APIKey, Session: a.Session}
+}
+
 // EnrolRequest 登记一个账户的入参。
 type EnrolRequest struct {
 	Service string `json:"service"`
-	APIKey  string `json:"api_key"`
-	Label   string `json:"label"`
+	// APIKey 永久 Bearer key（可选；与 session_text 至少给一个）
+	APIKey string `json:"api_key"`
+	// SessionText 用户从浏览器/CookieCloud 复制的会话串（整串 cookie / Cookie 头 / 裸 session_token）
+	SessionText string `json:"session_text"`
+	Label       string `json:"label"`
 }
 
 func nowISO() string {
@@ -45,10 +58,11 @@ func mustJSON(v any) string {
 // ---------------------------------------------------------------- 存储层
 
 const upsertSQL = `INSERT INTO commandcode_accounts
-	(service, api_key_enc, label, updated_at)
-	VALUES (?, ?, ?, ?)
+	(service, api_key_enc, session_token_enc, label, updated_at)
+	VALUES (?, ?, ?, ?, ?)
 	ON CONFLICT(service) DO UPDATE SET
-		api_key_enc = excluded.api_key_enc,
+		api_key_enc = COALESCE(excluded.api_key_enc, commandcode_accounts.api_key_enc),
+		session_token_enc = COALESCE(excluded.session_token_enc, commandcode_accounts.session_token_enc),
 		label = COALESCE(NULLIF(excluded.label, ''), commandcode_accounts.label),
 		updated_at = excluded.updated_at`
 
@@ -78,13 +92,13 @@ func decryptOrErr(enc, what string) (string, error) {
 	return *plain, nil
 }
 
-// load 读出某个账户槽位（解密 key，因此需要主密钥）。
+// load 读出某个账户槽位（解密凭据，因此需要主密钥）。
 func load(service string) (*Account, error) {
 	var label, probeJSON, updatedAt string
-	var keyEnc sql.NullString
-	err := store.DB.QueryRow(`SELECT api_key_enc, label, probe_data, updated_at
+	var keyEnc, sessEnc sql.NullString
+	err := store.DB.QueryRow(`SELECT api_key_enc, session_token_enc, label, probe_data, updated_at
 		FROM commandcode_accounts WHERE service = ?`, service).
-		Scan(&keyEnc, &label, &probeJSON, &updatedAt)
+		Scan(&keyEnc, &sessEnc, &label, &probeJSON, &updatedAt)
 	if err == sql.ErrNoRows {
 		return nil, fmt.Errorf("没有登记过名为 %s 的账户", service)
 	}
@@ -99,6 +113,9 @@ func load(service string) (*Account, error) {
 		acc.ProbeData = map[string]any{}
 	}
 	if acc.APIKey, err = decryptOrErr(keyEnc.String, "api_key"); err != nil {
+		return nil, err
+	}
+	if acc.Session, err = decryptOrErr(sessEnc.String, "session_token"); err != nil {
 		return nil, err
 	}
 	return acc, nil
@@ -144,21 +161,30 @@ func view(acc *Account, live map[string]any) map[string]any {
 	if live != nil {
 		p = live
 	}
+	cred := acc.credential()
+	var sess map[string]any
+	if acc.Session != "" {
+		sess = SessionSummary(acc.Session)
+	}
 	return map[string]any{
-		"service":    acc.Service,
-		"label":      acc.Label,
-		"key_mask":   maskOrNil(acc.APIKey),
-		"account":    probeField(p, "account"),
-		"plan":       probeField(p, "plan"),
-		"credits":    probeField(p, "credits"),
-		"five_hour":  probeField(p, "five_hour"),
-		"weekly":     probeField(p, "weekly"),
-		"monthly":    probeField(p, "monthly"),
-		"usage":      probeField(p, "usage"),
-		"failures":   probeField(p, "failures"),
-		"probed_at":  probeField(p, "probed_at"),
-		"verdict":    probeFieldDefault(p, "verdict", "unknown"),
-		"updated_at": acc.UpdatedAt,
+		"service":     acc.Service,
+		"label":       acc.Label,
+		"key_mask":    maskOrNil(acc.APIKey),
+		"has_api_key": acc.APIKey != "",
+		"has_session": acc.Session != "",
+		"cred_source": cred.describe(),
+		"session":     sess,
+		"account":     probeField(p, "account"),
+		"plan":        probeField(p, "plan"),
+		"credits":     probeField(p, "credits"),
+		"five_hour":   probeField(p, "five_hour"),
+		"weekly":      probeField(p, "weekly"),
+		"monthly":     probeField(p, "monthly"),
+		"usage":       probeField(p, "usage"),
+		"failures":    probeField(p, "failures"),
+		"probed_at":   probeField(p, "probed_at"),
+		"verdict":     probeFieldDefault(p, "verdict", "unknown"),
+		"updated_at":  acc.UpdatedAt,
 	}
 }
 
@@ -213,69 +239,110 @@ func validService(s string) bool {
 	return true
 }
 
-// Enrol 登记或更新一个账户。先打 whoami 验证 key，被拒就不落库。
+// validateCredential 只出结果、不写库地确认这条凭据真能打开数据面。
+// api_key 面先打 whoami；会话面没有身份端点，用 billing/credits 验证。
+func validateCredential(cred Credential) (who map[string]any, f *Fail) {
+	if cred.Key != "" {
+		return Whoami(cred)
+	}
+	// 会话面：credits 能返回即视为有效
+	if _, f := Credits(cred); f != nil {
+		return nil, f
+	}
+	return nil, nil
+}
+
+// Enrol 登记或更新一个账户。至少要能通过一次探测（api_key 的 whoami / 会话的 credits），
+// 被拒就不落库——免得面板上留一个死账户。
 func Enrol(req *EnrolRequest) (map[string]any, error) {
 	service := strings.ToLower(strings.TrimSpace(req.Service))
 	if !validService(service) {
 		return nil, fmt.Errorf("service 只能是字母/数字/-/_.（用于主键）")
 	}
 	key := strings.TrimSpace(req.APIKey)
-	if key == "" {
-		return nil, fmt.Errorf("api_key 必填（commandcode.ai/settings 里获取）")
+	var session string
+	if text := strings.TrimSpace(req.SessionText); text != "" {
+		s, err := ParseSessionText(text)
+		if err != nil {
+			return nil, fmt.Errorf("解析会话失败: %w", err)
+		}
+		session = s
 	}
-	// key 无效在 whoami 就会暴露（401/403），没必要落一个死账户
-	if _, f := Whoami(key); f != nil {
-		return nil, fmt.Errorf("key 校验未通过: %w", f)
+	if key == "" && session == "" {
+		return nil, fmt.Errorf("api_key 和 session_text 至少要给一个")
 	}
-	if _, err := store.DB.Exec(upsertSQL, service, encryptOrEmpty(key), req.Label, nowISO()); err != nil {
+	// 校验：凭据无效就不落库
+	if _, f := validateCredential(Credential{Key: key, Session: session}); f != nil {
+		return nil, fmt.Errorf("凭据校验未通过: %w", f)
+	}
+	var keyEnc, sessEnc string
+	saved := []string{}
+	if key != "" {
+		keyEnc = encryptOrEmpty(key)
+		saved = append(saved, "api_key")
+	}
+	if session != "" {
+		sessEnc = encryptOrEmpty(session)
+		saved = append(saved, "session_token")
+	}
+	if _, err := store.DB.Exec(upsertSQL, service, nullIfEmpty(keyEnc), nullIfEmpty(sessEnc), req.Label, nowISO()); err != nil {
 		return nil, err
 	}
 	out, err := Probe(service)
 	if err != nil {
 		return nil, err
 	}
-	out["saved"] = []string{"api_key"}
+	out["saved"] = saved
+	out["cred_source"] = Credential{Key: key, Session: session}.describe()
 	return out, nil
 }
 
-// Probe 探测一个账户：四个端点各打一遍，任一面失败只记 failures，不拖垮其他面。
+// Probe 探测一个账户：四条数据面端点各打一遍，任一面失败只记 failures，不拖垮其他面。
+// 凭据按「api_key 优先，会话兜底」选取。
 func Probe(service string) (map[string]any, error) {
 	acc, err := load(service)
 	if err != nil {
 		return nil, err
 	}
-	if acc.APIKey == "" {
-		return nil, fmt.Errorf("该账户没有登记 api_key")
+	if acc.APIKey == "" && acc.Session == "" {
+		return nil, fmt.Errorf("该账户没有登记 api_key 或 session_token")
 	}
-	key := acc.APIKey
+	cred := acc.credential()
+	sessionMode := cred.sessionMode()
 	out := map[string]any{
-		"service":   service,
-		"probed_at": nowISO(),
+		"service":     service,
+		"probed_at":   nowISO(),
+		"cred_source": cred.describe(),
 	}
 	failures := []string{}
 
-	// 1. whoami → 账户身份（+ orgId 供订阅端点）
+	// 1. whoami → 账户身份（+ orgId 供订阅端点）。仅 api_key 面有该端点。
 	var orgID string
-	who, f := Whoami(key)
-	if f != nil {
-		failures = append(failures, "whoami: "+f.Error())
-		if f.Kind == FailKeyRejected {
-			// key 直接被拒：其余端点没有意义，直接出结论
-			out["account"] = nil
-			out["failures"] = failures
-			out["verdict"] = "key_rejected"
-			_ = setProbeData(service, out)
-			return out, nil
+	if !sessionMode {
+		who, f := Whoami(cred)
+		if f != nil {
+			failures = append(failures, "whoami: "+f.Error())
+			if f.Kind == FailKeyRejected {
+				// key 直接被拒：其余端点没有意义，直接出结论
+				out["account"] = nil
+				out["failures"] = failures
+				out["verdict"] = "key_rejected"
+				_ = setProbeData(service, out)
+				return out, nil
+			}
+		} else {
+			out["account"] = who
+			orgID, _ = who["org_id"].(string)
 		}
 	} else {
-		out["account"] = who
-		orgID, _ = who["org_id"].(string)
+		// 会话面没有 identity 端点，身份留空；凭据来源已由 cred_source 说明
+		out["account"] = nil
 	}
 
-	// 2. billing/credits → 余额 + 5h/周窗口
-	cr, f := Credits(key)
-	if f != nil {
-		failures = append(failures, "billing/credits: "+f.Error())
+	// 2. billing/credits → 余额 + 5h/周窗口（会话面同样有该端点）
+	cr, creditsFail := Credits(cred)
+	if creditsFail != nil {
+		failures = append(failures, "billing/credits: "+creditsFail.Error())
 	} else {
 		out["credits"] = cr
 		out["five_hour"] = cr["five_hour"]
@@ -283,7 +350,7 @@ func Probe(service string) (map[string]any, error) {
 	}
 
 	// 3. billing/subscriptions → 套餐与账期
-	sub, f := Subscriptions(key, orgID)
+	sub, f := Subscriptions(cred, orgID)
 	if f != nil {
 		failures = append(failures, "billing/subscriptions: "+f.Error())
 		// credits 响应里可能带 planId，作兜底
@@ -302,13 +369,17 @@ func Probe(service string) (map[string]any, error) {
 	}
 
 	// 4. usage/summary → 账期累计统计
-	us, f := UsageSummary(key)
+	us, f := UsageSummary(cred)
 	if f != nil {
 		failures = append(failures, "usage/summary: "+f.Error())
 	} else {
 		out["usage"] = us
 	}
 
+	// 会话面且首面就 401：说明 session_token 过期，报明确的「要重抓」状态。
+	if sessionMode && creditsFail != nil && creditsFail.NeedsRefresh() {
+		out["session_state"] = "needs_refresh"
+	}
 	// 月度窗口是推导值：cap 来自套餐映射，used = cap − 剩余，重置 = 账期结束
 	out["monthly"] = deriveMonthly(out)
 	if len(failures) > 0 {
@@ -353,12 +424,20 @@ func deriveMonthly(out map[string]any) map[string]any {
 	}
 }
 
-// verdict 面板上的一句话结论。
+// verdict 面板上的一句话结论。api_key 面靠 account 身份，会话面没有身份端点，
+// 所以以「有没有拿到 credits/plan 数据」为准，而不是以 account 是否为空。
 func verdict(out map[string]any) string {
-	if out["account"] == nil {
-		if out["verdict"] == "key_rejected" {
-			return "key_rejected"
-		}
+	if out["verdict"] == "key_rejected" {
+		return "key_rejected"
+	}
+	if s, _ := out["session_state"].(string); s == "needs_refresh" {
+		return "session_expired"
+	}
+	// 完全没拿到数据面：账号身份也没有，就是打不通/凭据全废
+	_, hasCredits := out["credits"].(map[string]any)
+	_, hasPlan := out["plan"].(map[string]any)
+	_, hasUsage := out["usage"].(map[string]any)
+	if !hasCredits && !hasPlan && !hasUsage {
 		return "unreachable"
 	}
 	// 整体限流状态优先：windowLimits.exceeded 直接指出是哪个窗口在拦

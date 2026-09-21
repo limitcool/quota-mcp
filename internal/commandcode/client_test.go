@@ -143,21 +143,27 @@ func TestVerdict(t *testing.T) {
 		out  map[string]any
 		want string
 	}{
-		{"serving", map[string]any{"account": map[string]any{"id": "u_1"}}, "serving"},
+		{"serving", map[string]any{"account": map[string]any{"id": "u_1"}, "credits": map[string]any{"monthly_credits": 1.0}}, "serving"},
+		{"serving via session (no account)", map[string]any{"credits": map[string]any{"monthly_credits": 1.0}, "cred_source": "session"}, "serving"},
 		{"five hour exceeded", map[string]any{
 			"account":   map[string]any{"id": "u_1"},
+			"credits":   map[string]any{"monthly_credits": 1.0},
 			"five_hour": map[string]any{"exceeded": true},
 		}, "limited"},
 		{"weekly exceeded", map[string]any{
 			"account": map[string]any{"id": "u_1"},
+			"credits": map[string]any{"monthly_credits": 1.0},
 			"weekly":  map[string]any{"exceeded": true},
 		}, "limited"},
 		{"monthly exceeded", map[string]any{
 			"account": map[string]any{"id": "u_1"},
+			"credits": map[string]any{"monthly_credits": 1.0},
 			"monthly": map[string]any{"exceeded": true},
 		}, "limited"},
 		{"key rejected", map[string]any{"account": nil, "verdict": "key_rejected"}, "key_rejected"},
+		{"session expired", map[string]any{"session_state": "needs_refresh", "cred_source": "session"}, "session_expired"},
 		{"unreachable", map[string]any{"account": nil}, "unreachable"},
+		{"unreachable session", map[string]any{"cred_source": "session"}, "unreachable"},
 	}
 	for _, c := range cases {
 		if got := verdict(c.out); got != c.want {
@@ -183,5 +189,58 @@ func TestKeyRejectedErrorText(t *testing.T) {
 	e := &Fail{Kind: FailKeyRejected, Code: 401}
 	if !strings.Contains(e.Error(), "commandcode.ai/settings") {
 		t.Fatalf("错误文本应指引去 settings: %q", e.Error())
+	}
+}
+
+func TestParseSessionText(t *testing.T) {
+	// 整串 document.cookie
+	got, err := ParseSessionText("a=b; __Secure-commandcode_prod_.session_token=AQ7n7BNIxyz; __stripe_mid=s")
+	if err != nil || got != "AQ7n7BNIxyz" {
+		t.Fatalf("整串 cookie 解析失败: %q %v", got, err)
+	}
+	// Cookie 头行（大小写不敏感）
+	got, err = ParseSessionText("Cookie: __SECURE-COMMANDCODE_PROD_.SESSION_TOKEN=TOK123; other=1")
+	if err != nil || got != "TOK123" {
+		t.Fatalf("Cookie 头解析失败: %q %v", got, err)
+	}
+	// 裸值
+	got, err = ParseSessionText("AQ7n7BNI-opaque.token_value")
+	if err != nil || got != "AQ7n7BNI-opaque.token_value" {
+		t.Fatalf("裸值解析失败: %q %v", got, err)
+	}
+	// 空 / 找不到
+	if _, err := ParseSessionText(""); err == nil {
+		t.Fatal("空串应报错")
+	}
+	if _, err := ParseSessionText("foo=bar; baz=qux"); err == nil {
+		t.Fatal("没有 session_token 应报错")
+	}
+}
+
+func TestCredentialModes(t *testing.T) {
+	if (Credential{Key: "k"}).sessionMode() {
+		t.Fatal("有 key 时不应走 session 模式")
+	}
+	if !(Credential{Session: "s"}).sessionMode() {
+		t.Fatal("只有 session 时应走 session 模式")
+	}
+	if (Credential{Key: "k", Session: "s"}).sessionMode() {
+		t.Fatal("两者都有时优先 key，不应走 session 模式")
+	}
+	if (Credential{Key: "k", Session: "s"}).describe() != "api_key" {
+		t.Fatal("describe 应报 api_key")
+	}
+	if (Credential{Session: "s"}).describe() != "session" {
+		t.Fatal("describe 应报 session")
+	}
+}
+
+func TestSessionExpiredErrorText(t *testing.T) {
+	e := &Fail{Kind: FailSessionExpired, Code: 401}
+	if !strings.Contains(e.Error(), "CookieCloud") {
+		t.Fatalf("session 过期错误文本应指引 CookieCloud: %q", e.Error())
+	}
+	if !e.NeedsRefresh() {
+		t.Fatal("session 过期应 NeedsRefresh")
 	}
 }
