@@ -1,0 +1,11 @@
+# 二进制
+/quota-mcp
+/quota-mcp.exe
+
+# 数据（含密文，绝不入库）
+/data/
+
+# 编辑器
+.idea/
+.vscode/
+*.swp

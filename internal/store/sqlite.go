@@ -1,0 +1,68 @@
+package store
+
+import (
+	"database/sql"
+	"os"
+	"path/filepath"
+
+	_ "modernc.org/sqlite"
+)
+
+// DB 全局数据库句柄。单二进制服务，包级变量是最省事的接法；
+// 库表结构见 Init。
+var DB *sql.DB
+
+// Init 打开（或创建）SQLite 库并建表。path 为空时用环境变量 QUOTA_MCP_DB，
+// 再为空用 ./data/quota-mcp.db。
+func Init(path string) error {
+	if path == "" {
+		path = os.Getenv("QUOTA_MCP_DB")
+	}
+	if path == "" {
+		path = filepath.Join("data", "quota-mcp.db")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return err
+	}
+	var err error
+	DB, err = sql.Open("sqlite", path+"?_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
+	if err != nil {
+		return err
+	}
+	_, err = DB.Exec(schema)
+	return err
+}
+
+// schema 两张账户表，一 provider 一张：
+//   stepfun_accounts    —— 双鉴权面：plan key（永久）+ console 会话（~2h，可续）
+//   commandcode_accounts —— 单把 Bearer key，无会话
+// 密文列只存密文；identity 存非机密身份（uid/邮箱/key 掩码），probe_data 存最近一次探测聚合。
+const schema = `
+CREATE TABLE IF NOT EXISTS stepfun_accounts (
+	service TEXT PRIMARY KEY,
+	region TEXT NOT NULL DEFAULT 'com',
+	label TEXT DEFAULT '',
+	access_key_enc TEXT,
+	console_session_enc TEXT,
+	identity TEXT DEFAULT '',
+	probe_data TEXT DEFAULT '',
+	created_at TEXT DEFAULT (datetime('now')),
+	updated_at TEXT DEFAULT (datetime('now'))
+);
+CREATE TABLE IF NOT EXISTS commandcode_accounts (
+	service TEXT PRIMARY KEY,
+	api_key_enc TEXT,
+	label TEXT DEFAULT '',
+	identity TEXT DEFAULT '',
+	probe_data TEXT DEFAULT '',
+	created_at TEXT DEFAULT (datetime('now')),
+	updated_at TEXT DEFAULT (datetime('now'))
+);
+`
+
+func Close() error {
+	if DB != nil {
+		return DB.Close()
+	}
+	return nil
+}
