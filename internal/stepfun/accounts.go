@@ -627,8 +627,16 @@ func verdict(acc *Account, out map[string]any) string {
 		}
 	case false:
 		kind, _ := plan["kind"].(string)
+		console, _ := out["console"].(map[string]any)
+		consoleOK := acc.Session != nil && console != nil && console["ok"] == true
 		switch kind {
 		case "not_enrolled":
+			// 没给 access_key：plan 面天然探不了。但若控制台会话能打通，就仍看得到
+			// 真实余量——这是「只登记了会话」的健康态，不是故障；报成 key_not_enrolled
+			// 会把「控制台余量 71%」的账户打成告警（实测踩到）。
+			if consoleOK {
+				return "console_only"
+			}
 			return "key_not_enrolled"
 		case "unreachable":
 			return "unreachable"

@@ -248,6 +248,21 @@ func TestVerdictPrefersTheDurablePlane(t *testing.T) {
 	if got := verdict(acc, map[string]any{"plan": map[string]any{"ok": false, "kind": "not_enrolled"}}); got != "key_not_enrolled" {
 		t.Fatalf("verdict = %q", got)
 	}
+	// 只登记了会话（没 access_key）且控制台能打通 → console_only，绝不能报成 key_not_enrolled
+	sessOnly := &Account{Service: "x", Region: RegionAi, Session: &Session{Token: "a.b.c", Webid: "w"}}
+	if got := verdict(sessOnly, map[string]any{
+		"plan":    map[string]any{"ok": false, "kind": "not_enrolled"},
+		"console": map[string]any{"ok": true},
+	}); got != "console_only" {
+		t.Fatalf("session-only console ok verdict = %q, want console_only", got)
+	}
+	// 会话掉了（console 不通）且没 key → 才该是 key_not_enrolled
+	if got := verdict(sessOnly, map[string]any{
+		"plan":    map[string]any{"ok": false, "kind": "not_enrolled"},
+		"console": map[string]any{"ok": false},
+	}); got != "key_not_enrolled" {
+		t.Fatalf("session-only console down verdict = %q", got)
+	}
 	if got := verdict(acc, map[string]any{"plan": map[string]any{"ok": false, "kind": "unreachable"}}); got != "unreachable" {
 		t.Fatalf("verdict = %q", got)
 	}
