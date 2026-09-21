@@ -313,3 +313,17 @@ func jwtWith(claims map[string]any) string {
 	b, _ := json.Marshal(claims)
 	return "eyJhbGciOiJIUzI1NiJ9." + base64.RawURLEncoding.EncodeToString(b) + ".sig"
 }
+
+// grab 在名字正好落在串尾时曾 from = i+1 > len(lower) 越界 panic（与 commandcode 同款）。
+func TestGrabNameAtTailNoPanic(t *testing.T) {
+	for _, in := range []string{
+		"Oasis-Token",
+		"Cookie: Oasis-Token",
+		"a=b; Oasis-Token",
+		"a=b; Oasis-Token ",
+	} {
+		if got := grab(in, "Oasis-Token"); got != "" {
+			t.Fatalf("grab(%q) = %q, 期望空", in, got)
+		}
+	}
+}

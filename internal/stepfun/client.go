@@ -731,6 +731,10 @@ func grab(text, name string) string {
 	target := strings.ToLower(name)
 	from := 0
 	for {
+		// 上一次匹配落在串尾时 from = i+1 > len(lower)，再切片会越界 panic（与 commandcode 同款）。
+		if from >= len(lower) {
+			return ""
+		}
 		rel := strings.Index(lower[from:], target)
 		if rel < 0 {
 			return ""

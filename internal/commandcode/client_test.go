@@ -208,12 +208,52 @@ func TestParseSessionText(t *testing.T) {
 	if err != nil || got != "AQ7n7BNI-opaque.token_value" {
 		t.Fatalf("裸值解析失败: %q %v", got, err)
 	}
+	// cookie 值带 %XX 转义应解码
+	got, err = ParseSessionText("a=b; __Secure-commandcode_prod_.session_token=AQ7n%2Evalue; c=d")
+	if err != nil || got != "AQ7n.value" {
+		t.Fatalf("转义值未解码: %q %v", got, err)
+	}
 	// 空 / 找不到
 	if _, err := ParseSessionText(""); err == nil {
 		t.Fatal("空串应报错")
 	}
 	if _, err := ParseSessionText("foo=bar; baz=qux"); err == nil {
 		t.Fatal("没有 session_token 应报错")
+	}
+}
+
+// 名字在串尾且无 = 时不得 panic（曾 slice bounds out of range [41:40]），应回明确错误。
+func TestParseSessionTextNameAtTailNoPanic(t *testing.T) {
+	name := SessionCookieName
+	inputs := []string{
+		name,                 // 裸名字
+		"Cookie: " + name,    // Cookie 头，名字在尾
+		"a=b; " + name,       // cookie 串，名字在尾
+		"a=b; " + name + " ", // 尾随空白
+	}
+	for _, in := range inputs {
+		got, err := ParseSessionText(in)
+		if err == nil {
+			t.Fatalf("输入 %q 应报错，却得到 %q", in, got)
+		}
+		if got != "" {
+			t.Fatalf("输入 %q 应返回空 token，却得到 %q", in, got)
+		}
+	}
+}
+
+// 裸值分支不得误收非 token：含 ',' 的输入拒绝；含 '=' 但 key 不是 session 名拒绝。
+func TestParseSessionTextRejectsNonTokens(t *testing.T) {
+	for _, in := range []string{
+		"abc,def",   // ',' 是 cookie 分隔符，不可能是 token
+		"abc=def==", // '=' 左侧不是 session 名
+		"foo=bar",   // 普通键值
+		"a=b, c=d",  // cookie 串但无 session_token
+	} {
+		got, err := ParseSessionText(in)
+		if err == nil {
+			t.Fatalf("输入 %q 本应拒绝，却原样回传 %q", in, got)
+		}
 	}
 }
 

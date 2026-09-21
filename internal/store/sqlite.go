@@ -38,21 +38,43 @@ func Init(path string) error {
 }
 
 // migrate 幂等地给旧库补新增列。CREATE TABLE IF NOT EXISTS 不会给已存在的表加列，
-// 所以每加一个列都要在这里显式 ALTER 一次（列已存在时 ALTER 报错，忽略即可）。
+// 所以每加一个列都要在这里显式 ALTER 一次。
 func migrate() error {
-	stmts := []string{
-		// v0.2.2：commandcode 增加浏览器会话面（Cookie），与 api_key 面并存。
-		`ALTER TABLE commandcode_accounts ADD COLUMN session_token_enc TEXT`,
-	}
-	for _, s := range stmts {
-		if _, err := DB.Exec(s); err != nil {
-			// 列已存在（duplicate column name）视为已迁移完成，其余错误上抛
-			if !strings.Contains(strings.ToLower(err.Error()), "duplicate column") {
-				return err
-			}
-		}
+	// 依赖错误文本 "duplicate column" 判定既脆弱（措辞随驱动变）又难读；
+	// 先用 PRAGMA 查列是否存在，缺才 ALTER。
+	if err := ensureColumn("commandcode_accounts", "session_token_enc", "TEXT"); err != nil {
+		return err
 	}
 	return nil
+}
+
+// ensureColumn 若 table 缺 column 就 ALTER 补上（幂等）。
+func ensureColumn(table, column, typ string) error {
+	rows, err := DB.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			cid       int
+			name, ct  string
+			notnull   int
+			dfltValue sql.NullString
+			pk        int
+		)
+		if err := rows.Scan(&cid, &name, &ct, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if strings.EqualFold(name, column) {
+			return nil // 列已存在
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	_, err = DB.Exec("ALTER TABLE " + table + " ADD COLUMN " + column + " " + typ)
+	return err
 }
 
 // schema 三张表：

@@ -148,7 +148,7 @@ func evalCommandCode(a map[string]any, cfg Config) []Alert {
 	case "session_expired":
 		out = append(out, Alert{
 			Kind: KindSessionDead, Provider: "commandcode", Service: svc, Severity: SevCrit,
-			Title: "会话已过期", Detail: "session_token 被拒（401），请重新从 CookieCloud 同步 commandcode.ai 登录态",
+			Title: "会话已过期", Detail: "session_token 被拒（401），请重新同步 commandcode.ai 登录态（CookieCloud 或从 DevTools 手动复制 session cookie）",
 		})
 		return out
 	case "unreachable":
