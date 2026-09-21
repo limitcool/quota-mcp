@@ -1,54 +1,57 @@
+**English** | [简体中文](README.zh-CN.md)
+
 # quota-mcp
 
-AI 订阅账户的**用量 / 额度追踪服务**：把散在各家官网控制台里的余额、订阅到期、节流窗口聚到一个地方，同时提供 **REST 管理面**和 **MCP 查询面**——agent（Hermes、Claude Code 等）加一条配置就能直接问「我的额度还剩多少」。
+A **usage & quota tracker for AI subscription accounts**. It pulls the balances, subscription expiry dates and rate-limit windows that are scattered across vendor dashboards into one place, and exposes them through both a **REST management API** and an **MCP query surface** — point your agent (Hermes, Claude Code, …) at it with one config line and it can answer "how much quota do I have left?" on its own.
 
-现已支持两个平台：
+Two platforms supported today:
 
-| 平台 | 数据来源 | 凭据形式 | 能看什么 |
+| Platform | Data source | Credential | What you can see |
 |---|---|---|---|
-| **StepFun**（阶跃星辰，`.ai` 国际站 / `.com` 国内站） | `platform.stepfun.{ai,com}` 控制台 Connect RPC | 浏览器会话（Oasis-Token，~2 h，自动续期）+ 可选 plan key | 订阅套餐与到期日、5 小时/周/订阅额度、名下 access key、会话健康 |
-| **Command Code**（commandcode.ai） | `api.commandcode.ai` 未公开 `/alpha/*` 端点 | 一把 Bearer API key | GOAT/Pro/Max 等套餐、5 小时/周/月度窗口、余额、账期请求统计 |
+| **StepFun** (阶跃星辰, `.ai` intl / `.com` China) | `platform.stepfun.{ai,com}` console Connect RPC | Browser session (Oasis-Token, ~2 h, auto-renewed) + optional plan key | Plan & expiry, 5-hour / weekly / subscription credit windows, access keys under the account, session health |
+| **Command Code** (commandcode.ai) | Undocumented `/alpha/*` endpoints on `api.commandcode.ai` | A single Bearer API key | Plan (GOAT/Pro/Max/…), 5-hour / weekly / monthly windows, balances, billing-period request stats |
 
-特性：
+Highlights:
 
-- **密文落库**：凭据 AES-256-GCM 加密后存 SQLite（纯 Go 驱动，无 CGO），接口只回掩码
-- **StepFun 会话自动续期**：后台每 60s 检查，TTL < 20 min 自动续；过期后续期会拿到降级的设备令牌，有护栏检测并拒绝落库
-- **双鉴权面**：StepFun 的 plan key（永久）与 console 会话（限额数据）分开管理、分开探测，verdict 以永久面为准
-- **MCP 只读**：查询面（列表/探测/汇总）开放给 agent；登记/续期/删除等写操作只走 REST
-- 单二进制，无外部依赖（SQLite 内置）
+- **Encrypted at rest**: credentials are AES-256-GCM encrypted into SQLite (pure-Go driver, no CGO); every endpoint returns masked views only
+- **StepFun session auto-renewal**: a background goroutine checks every 60 s and renews any session whose TTL drops below 20 min. Renewing an *expired* session gets you a degraded device token — there is a guard that detects this and refuses to persist it
+- **Dual auth planes**: StepFun's plan key (permanent) and console session (quota data) are managed and probed separately; the verdict is driven by the permanent plane
+- **MCP is read-only**: the query surface (list / probe / summarize) is safe to hand to agents; enrol / renew / delete live on the REST side only
+- Single binary, zero external services
 
-## 快速开始
+## Quick start
 
 ```bash
 go build -o quota-mcp ./cmd/quota-mcp
 
-# 生产请显式设置主密钥（64 hex 字符），否则按机器特征派生，换机器旧密文读不出
+# In production set the master key explicitly (64 hex chars). Without it the key is
+# derived from machine traits and old ciphertext becomes unreadable after a migration.
 export QUOTA_MCP_MASTER_KEY=$(openssl rand -hex 32)
 
 ./quota-mcp -db data/quota-mcp.db -listen 127.0.0.1:8780
 ```
 
-启动后：
+After startup:
 
-- `http://127.0.0.1:8780/healthz` 健康检查
-- `http://127.0.0.1:8780/api/stepfun/accounts` REST 列表
-- `http://127.0.0.1:8780/mcp` MCP 端点
+- `http://127.0.0.1:8780/healthz` health check
+- `http://127.0.0.1:8780/api/stepfun/accounts` REST list
+- `http://127.0.0.1:8780/mcp` MCP endpoint
 
-## 登记账户
+## Enrolling accounts
 
-### Command Code（一把 key，最简单）
+### Command Code (a single key — the easy one)
 
 ```bash
 curl -X POST http://127.0.0.1:8780/api/commandcode/accounts \
   -H 'Content-Type: application/json' \
-  -d '{"service":"cc-myname","api_key":"user_xxx","label":"主力"}'
+  -d '{"service":"cc-myname","api_key":"user_xxx","label":"primary"}'
 ```
 
-key 从 [commandcode.ai/settings/keys](https://commandcode.ai/settings/keys) 获取（只在创建时展示一次）。服务端先打 whoami 验证，被拒不落库。
+Get the key from [commandcode.ai/settings/keys](https://commandcode.ai/settings/keys) (shown once at creation). The server validates it with `whoami` first and refuses to store a rejected key.
 
-### StepFun（浏览器会话）
+### StepFun (browser session)
 
-Oasis-Token 是 HttpOnly cookie，`document.cookie` 读不到，需要从浏览器 DevTools 的请求头里拷。把整段 `Cookie:` 头（或裸 token）贴给服务端：
+`Oasis-Token` is an HttpOnly cookie, so `document.cookie` cannot read it — copy it from a request header in DevTools. Paste the whole `Cookie:` header (or the bare token) to the server:
 
 ```bash
 curl -X POST http://127.0.0.1:8780/api/stepfun/accounts \
@@ -56,59 +59,59 @@ curl -X POST http://127.0.0.1:8780/api/stepfun/accounts \
   -d '{"service":"ai-412848664332275712","region":"ai","session_text":"Oasis-Token=eyJ...; Oasis-Webid=...","email":"me@example.com"}'
 ```
 
-实测协议细节（移植时踩过的坑，均已处理）：
+Protocol findings from real-world testing (all handled in code):
 
-- `.ai` 的 Oasis-Token cookie 值是**两段 JWT 拼接**（8 段），console 只认整值，单取一段会 `token is illegal`
-- 时间戳两站单位不同：`.ai` 返回秒级字符串，`.com` 返回毫秒数，按量级自动判断
-- `.com` 的设备 token 只有 30 分钟寿命，且其 RefreshToken 会返回降级令牌——`.com` 会话需要定期重新导入
-- 会话**过期后**再续期会拿到设备令牌（mode 1，数据面一律 `token is illegal`），所以必须过期前续；代码有降级护栏，检测到就不落库
+- The `.ai` `Oasis-Token` cookie value is **two JWTs concatenated** (8 segments); the console only accepts the whole value — a single segment gets you `token is illegal`
+- Timestamp units differ per site: `.ai` returns second-level strings, `.com` returns milliseconds; the code infers by magnitude
+- `.com` device tokens live only 30 minutes and its RefreshToken returns a degraded token — `.com` sessions need periodic re-import
+- Renewing **after** expiry yields a device token (`mode 1`, data plane always `token is illegal`), so renewal must happen before expiry; a degradation guard refuses to store such tokens
 
 ## REST API
 
 ```
-GET    /api/stepfun/accounts                     列表（掩码视图）
-POST   /api/stepfun/accounts                     登记/更新（两条面至少探通一条才落库）
-POST   /api/stepfun/accounts/{service}/probe     探测（console 认证失败自动续一次）
-POST   /api/stepfun/accounts/{service}/renew     强制续期会话
-POST   /api/stepfun/accounts/{service}/register?region=ai   注册匿名设备槽位（自测用）
-DELETE /api/stepfun/accounts/{service}            删除
-POST   /api/stepfun/probe                        全部探测（给 cron 用）
+GET    /api/stepfun/accounts                     List (masked view)
+POST   /api/stepfun/accounts                     Enrol/update (stored only if at least one plane probes OK)
+POST   /api/stepfun/accounts/{service}/probe     Probe (auto-renews once on console auth failure)
+POST   /api/stepfun/accounts/{service}/renew     Force-renew the console session
+POST   /api/stepfun/accounts/{service}/register?region=ai   Register an anonymous device slot (self-test)
+DELETE /api/stepfun/accounts/{service}           Delete
+POST   /api/stepfun/probe                        Probe all (cron-friendly)
 
-GET    /api/commandcode/accounts                 列表（掩码视图）
-POST   /api/commandcode/accounts                 登记（key 先过 whoami 验证）
-POST   /api/commandcode/accounts/{service}/probe 探测
-DELETE /api/commandcode/accounts/{service}        删除
-POST   /api/commandcode/probe                    全部探测
+GET    /api/commandcode/accounts                 List (masked view)
+POST   /api/commandcode/accounts                 Enrol (key validated via whoami first)
+POST   /api/commandcode/accounts/{service}/probe Probe
+DELETE /api/commandcode/accounts/{service}       Delete
+POST   /api/commandcode/probe                    Probe all
 ```
 
-## MCP 工具面（给 agent 查询）
+## MCP surface (for agents)
 
-以 Streamable HTTP 挂载在 `/mcp`。Hermes 的 `mcp_servers` 配置示例：
+Served as Streamable HTTP on `/mcp`. Example `mcp_servers` entry:
 
 ```yaml
 mcp_servers:
   quota:
-    url: http://<你的机器>:8780/mcp
+    url: http://<your-host>:8780/mcp
 ```
 
-Claude Code / 其他 MCP 客户端同理（或走 stdio：`go run ./cmd/quota-mcp` 加 `-listen` 后由客户端以 HTTP 接入）。
+Works the same way from Claude Code or any other MCP client.
 
-工具列表（全部只读）：
+All tools are read-only:
 
-| 工具 | 说明 |
+| Tool | Description |
 |---|---|
-| `quota_list_accounts` | 列出全部账户：套餐、到期、剩余额度、会话/key 状态（掩码） |
-| `quota_probe_account` | 实时探测单个账户（打上游，慢数秒） |
-| `quota_probe_all` | 串行探测全部账户并刷新缓存 |
-| `quota_status` | 汇总：各平台账户数、健康/限流/失效数量、每账户一句话状态 |
+| `quota_list_accounts` | List every account: plan, expiry, remaining quota, session/key status (masked) |
+| `quota_probe_account` | Live-probe one account (hits upstream, takes a few seconds) |
+| `quota_probe_all` | Serially probe all accounts and refresh the cache |
+| `quota_status` | Summary: per-platform counts of serving / limited / invalid / needs-relogin, plus a one-line status per account |
 
-示例（问 agent「StepFun 额度还剩多少」→ 它调 `quota_status` / `quota_list_accounts`）：
+Example (`quota_status` output — what an agent would read to answer "how much quota is left?"):
 
 ```json
 {
   "stepfun": {
     "total": 2, "healthy": 2, "attention": 0,
-    "accounts": ["ai-4128…: 正常（10 模型）", "com-3766…: 正常（0 模型）"]
+    "accounts": ["ai-4128…: ok (10 models)", "com-3766…: ok (0 models)"]
   },
   "commandcode": {
     "total": 1, "serving": 1, "limited": 0, "key_rejected": 0,
@@ -117,22 +120,32 @@ Claude Code / 其他 MCP 客户端同理（或走 stdio：`go run ./cmd/quota-mc
 }
 ```
 
-## 项目结构
+## Project layout
 
 ```
-cmd/quota-mcp/        入口（flag / env 配置，单端口双面）
-internal/store/       SQLite + AES-256-GCM 加密 + 建表
-internal/stepfun/     StepFun 协议客户端 + 账户登记册 + 后台续期器
-internal/commandcode/ Command Code 协议客户端 + 账户登记册
-internal/api/         REST 管理面（net/http，无框架）
-internal/mcpsrv/      MCP 查询面（modelcontextprotocol/go-sdk）
+cmd/quota-mcp/        Entrypoint (flags/env config, one port serving both surfaces)
+internal/store/       SQLite + AES-256-GCM encryption + schema
+internal/stepfun/     StepFun protocol client + account registry + background renewer
+internal/commandcode/ Command Code protocol client + account registry
+internal/api/         REST management surface (net/http, no framework)
+internal/mcpsrv/      MCP query surface (modelcontextprotocol/go-sdk)
 ```
 
-## 安全边界
+## Security boundary
 
-- 密文只进库、不进日志、不回响应；任何接口只出掩码
-- REST 含写操作，**只绑回环或内网**；要对外就把 MCP 面单独暴露（或加反代 +鉴权）
-- 主密钥丢了 = 库里所有凭据读不出，请备份 `QUOTA_MCP_MASTER_KEY`
+- Ciphertext goes to the DB only — never to logs, never to responses; every endpoint returns masks
+- The REST surface contains writes: **bind it to loopback or a private network**. To expose it publicly, front it with a reverse proxy + auth and only publish the MCP path
+- Losing the master key means every stored credential becomes unreadable — back up `QUOTA_MCP_MASTER_KEY`
+
+## Releases
+
+Binaries for Linux / macOS / Windows (amd64 + arm64) are attached to each GitHub Release. Grab the latest:
+
+```bash
+# example: linux amd64
+curl -LO https://github.com/limitcool/quota-mcp/releases/latest/download/quota-mcp_linux_amd64
+chmod +x quota-mcp_linux_amd64
+```
 
 ## License
 

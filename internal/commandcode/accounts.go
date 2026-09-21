@@ -345,10 +345,10 @@ func deriveMonthly(out map[string]any) map[string]any {
 		used = 0
 	}
 	return map[string]any{
-		"used":     used,
-		"cap":      capVal,
-		"exceeded": used >= capVal,
-		"reset_at": strOf(plan["current_period_end"]),
+		"used":      used,
+		"cap":       capVal,
+		"exceeded":  used >= capVal,
+		"reset_at":  strOf(plan["current_period_end"]),
 		"estimated": true,
 	}
 }

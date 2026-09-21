@@ -34,8 +34,10 @@ func Init(path string) error {
 }
 
 // schema 两张账户表，一 provider 一张：
-//   stepfun_accounts    —— 双鉴权面：plan key（永久）+ console 会话（~2h，可续）
-//   commandcode_accounts —— 单把 Bearer key，无会话
+//
+//	stepfun_accounts    —— 双鉴权面：plan key（永久）+ console 会话（~2h，可续）
+//	commandcode_accounts —— 单把 Bearer key，无会话
+//
 // 密文列只存密文；identity 存非机密身份（uid/邮箱/key 掩码），probe_data 存最近一次探测聚合。
 const schema = `
 CREATE TABLE IF NOT EXISTS stepfun_accounts (

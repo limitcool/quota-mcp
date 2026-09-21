@@ -44,7 +44,7 @@ type EnrolRequest struct {
 	Service string `json:"service"`
 	// Region ai | com
 	Region string `json:"region"`
-	Label   string `json:"label"`
+	Label  string `json:"label"`
 	// AccessKey plan 推理 key（sk-…）。可以只登记会话不登记 key，反之亦然。
 	AccessKey string `json:"access_key"`
 	// SessionText 用户自己从浏览器里复制的 cookie 串 / Oasis-Token 头 / 裸 JWT
@@ -119,7 +119,7 @@ func decryptOrErr(enc string, what string) (string, error) {
 func load(service string) (*Account, error) {
 	var (
 		regionStr, label, identityJSON, probeJSON, updatedAt string
-		accessEnc, sessionEnc                                 nullStr
+		accessEnc, sessionEnc                                nullStr
 	)
 	err := store.DB.QueryRow(`SELECT region, label, access_key_enc, console_session_enc,
 		identity, probe_data, updated_at FROM stepfun_accounts WHERE service = ?`, service).
@@ -220,22 +220,22 @@ func view(acc *Account, live map[string]any) map[string]any {
 		sess = SessionSummary(acc.Session)
 	}
 	return map[string]any{
-		"service":          acc.Service,
-		"region":           acc.Region.String(),
-		"label":            acc.Label,
-		"has_access_key":   acc.AccessKey != "",
-		"access_key_mask":  maskOrNil(acc.AccessKey),
-		"email":            acc.Email,
-		"sessionless":      acc.Sessionless,
-		"session":          sess,
-		"probed_at":        probeField(p, "probed_at"),
-		"plan":             probeField(p, "plan"),
-		"console":          probeField(p, "console"),
-		"console_error":    probeField(p, "console_error"),
-		"renewed":          probeFieldDefault(p, "renewed", false),
-		"session_state":    probeField(p, "session_state"),
-		"verdict":          probeField(p, "verdict"),
-		"updated_at":       acc.UpdatedAt,
+		"service":         acc.Service,
+		"region":          acc.Region.String(),
+		"label":           acc.Label,
+		"has_access_key":  acc.AccessKey != "",
+		"access_key_mask": maskOrNil(acc.AccessKey),
+		"email":           acc.Email,
+		"sessionless":     acc.Sessionless,
+		"session":         sess,
+		"probed_at":       probeField(p, "probed_at"),
+		"plan":            probeField(p, "plan"),
+		"console":         probeField(p, "console"),
+		"console_error":   probeField(p, "console_error"),
+		"renewed":         probeFieldDefault(p, "renewed", false),
+		"session_state":   probeField(p, "session_state"),
+		"verdict":         probeField(p, "verdict"),
+		"updated_at":      acc.UpdatedAt,
 	}
 }
 
@@ -354,10 +354,10 @@ func Enrol(req *EnrolRequest) (map[string]any, error) {
 	}
 	if session != nil {
 		sessionEnc = encryptOrEmpty(mustJSON(map[string]any{
-			"token":        session.Token,
-			"webid":        session.Webid,
-			"refresh":      session.Refresh,
-			"captured_at":  now,
+			"token":       session.Token,
+			"webid":       session.Webid,
+			"refresh":     session.Refresh,
+			"captured_at": now,
 		}))
 	}
 	if _, err := store.DB.Exec(upsertSQL, service, region.String(), req.Label,
@@ -535,11 +535,11 @@ func Probe(service string) (map[string]any, error) {
 		return nil, err
 	}
 	out := map[string]any{
-		"service":    service,
-		"region":     acc.Region.String(),
-		"email":      acc.Email,
+		"service":     service,
+		"region":      acc.Region.String(),
+		"email":       acc.Email,
 		"sessionless": acc.Sessionless,
-		"probed_at":  nowISO(),
+		"probed_at":   nowISO(),
 	}
 	renewed := false
 
@@ -672,10 +672,10 @@ func Renew(service string) (map[string]any, error) {
 		return nil, err
 	}
 	return map[string]any{
-		"service":      service,
-		"renewed_at":   nowISO(),
+		"service":       service,
+		"renewed_at":    nowISO(),
 		"token_changed": changed,
-		"session":      SessionSummary(next),
+		"session":       SessionSummary(next),
 	}, nil
 }
 
@@ -735,12 +735,12 @@ func RegisterSlot(service string, region Region) (map[string]any, error) {
 		"service": service,
 		"region":  region.String(),
 		"registered": map[string]any{
-			"webid_mask":   Mask(webid),
-			"oasis_id":     t.OasisID,
+			"webid_mask":    Mask(webid),
+			"oasis_id":      t.OasisID,
 			"duration_secs": t.Duration,
-			"token_len":    len([]rune(sess.Token)),
-			"has_refresh":  t.Refresh != "",
-			"exp":          ISOFromSecs(exp),
+			"token_len":     len([]rune(sess.Token)),
+			"has_refresh":   t.Refresh != "",
+			"exp":           ISOFromSecs(exp),
 		},
 		"renewal": renewal,
 	}, nil

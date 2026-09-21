@@ -295,8 +295,8 @@ func planInfo(planID string) (Plan, bool) {
 type Window struct {
 	Used     float64 `json:"used"`
 	Cap      float64 `json:"cap"`
-	Exceeded bool   `json:"exceeded"`
-	ResetAt  string `json:"reset_at"`
+	Exceeded bool    `json:"exceeded"`
+	ResetAt  string  `json:"reset_at"`
 }
 
 // pickWindow windowLimits.fiveHour 也可能叫 five_hour / rolling5h / 5h
@@ -387,12 +387,12 @@ func Credits(key string) (map[string]any, *Fail) {
 		}
 	}
 	out := map[string]any{
-		"monthly_credits":  nil,
+		"monthly_credits":   nil,
 		"purchased_credits": nil,
-		"free_credits":     nil,
-		"plan_id":          "",
-		"below_threshold":  false,
-		"credit_threshold": nil,
+		"free_credits":      nil,
+		"plan_id":           "",
+		"below_threshold":   false,
+		"credit_threshold":  nil,
 		// 账号整体限流状态：exceeded 直接指出是哪个窗口在拦（fiveHour/weekly）
 		"limited":   wl != nil && field(wl, "limited") == true,
 		"exceeded":  strOf(field(wlOrEmpty(wl), "exceeded")),
@@ -453,12 +453,12 @@ func Subscriptions(key, orgID string) (map[string]any, *Fail) {
 		return nil, &Fail{Kind: FailHTTP, Msg: "响应里没有 data/subscription"}
 	}
 	out := map[string]any{
-		"plan_id":             strOf(field(data, "planId", "plan_id")),
-		"status":              strOf(field(data, "status")),
-		"current_period_end":  ISOFromAny(field(data, "currentPeriodEnd", "current_period_end")),
+		"plan_id":              strOf(field(data, "planId", "plan_id")),
+		"status":               strOf(field(data, "status")),
+		"current_period_end":   ISOFromAny(field(data, "currentPeriodEnd", "current_period_end")),
 		"current_period_start": ISOFromAny(field(data, "currentPeriodStart", "current_period_start")),
 		"cancel_at_period_end": field(data, "cancelAtPeriodEnd", "cancel_at_period_end") == true,
-		"pending_phase":       field(data, "pendingPhase", "pending_phase"),
+		"pending_phase":        field(data, "pendingPhase", "pending_phase"),
 	}
 	return out, nil
 }
@@ -474,16 +474,16 @@ func UsageSummary(key string) (map[string]any, *Fail) {
 		u = v
 	}
 	out := map[string]any{
-		"total_count":    0.0,
-		"total_cost":     0.0,
-		"average_cost":   nil,
-		"success_rate":   nil,
-		"completed_count": 0.0,
-		"failed_count":   0.0,
-		"total_tokens_in": 0.0,
+		"total_count":      0.0,
+		"total_cost":       0.0,
+		"average_cost":     nil,
+		"success_rate":     nil,
+		"completed_count":  0.0,
+		"failed_count":     0.0,
+		"total_tokens_in":  0.0,
 		"total_tokens_out": 0.0,
-		"total_credits":  0.0,
-		"period_basis":   strOf(field(u, "periodBasis", "period_basis")),
+		"total_credits":    0.0,
+		"period_basis":     strOf(field(u, "periodBasis", "period_basis")),
 	}
 	for _, k := range []string{"totalCount", "total_count"} {
 		if x, ok := f64Of(field(u, k)); ok {

@@ -283,11 +283,11 @@ var httpClient = &http.Client{
 	// 一次多账户探测可能整轮都卡在黑名单 IP 上。
 	Timeout: 25 * time.Second,
 	Transport: &http.Transport{
-		DialContext:           (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   10 * time.Second,
-		MaxIdleConns:          16,
-		IdleConnTimeout:       90 * time.Second,
-		TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+		DialContext:         (&net.Dialer{Timeout: 5 * time.Second}).DialContext,
+		TLSHandshakeTimeout: 10 * time.Second,
+		MaxIdleConns:        16,
+		IdleConnTimeout:     90 * time.Second,
+		TLSClientConfig:     &tls.Config{MinVersion: tls.VersionTLS12},
 	},
 }
 
@@ -488,12 +488,12 @@ func PlanStatus(region Region, sess *Session) (map[string]any, *Fail) {
 	sub := fieldSub(v, "subscription")
 	def := fieldSub(v, "plan_definition", "planDefinition")
 	out := map[string]any{
-		"status":     nil,
-		"plan_name":  nil,
-		"plan_sku":   nil,
+		"status":      nil,
+		"plan_name":   nil,
+		"plan_sku":    nil,
 		"valid_until": "",
-		"auto_renew": nil,
-		"can_resign": nil,
+		"auto_renew":  nil,
+		"can_resign":  nil,
 	}
 	if s := fieldStr(v, "desc"); s != "" {
 		out["status"] = s
@@ -819,7 +819,7 @@ func SessionSummary(sess *Session) map[string]any {
 		"exp":        ISOFromSecs(exp),
 		"ttl_secs":   ttl,
 		// 读不出 exp（token 形状不对）时按已过期处理，宁可让面板提示重新登录
-		"expired":    !hasTTL || ttl <= 0,
+		"expired":     !hasTTL || ttl <= 0,
 		"has_refresh": sess.Refresh != "",
 	}
 	if mode, ok := sess.mode(); ok {
